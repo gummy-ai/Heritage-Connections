@@ -1,6 +1,12 @@
-# temp-website
+# 유물과 유물 사이
 
-## 디자인 초안 미리보기
+국립중앙박물관 유물의 연결을 살펴보고, 관심사에 따른 추천을 체험하는 웹사이트입니다.
+
+**[공개 웹사이트 바로가기 →](https://gummy-ai.github.io/temp-website/)**
+
+GitHub Pages에 공개되어 있어 설치나 로그인 없이 브라우저에서 이용할 수 있습니다.
+
+## 개발용 로컬 미리보기
 
 ```bash
 python3 scripts/preview.py --port 4173
@@ -31,13 +37,13 @@ Higgsfield 등으로 만든 영상·이미지는 `assets/media/`에 두고 `asse
 
 스크롤 재생용 영상은 키프레임 간격을 짧게 다시 인코딩해야 부드럽게 움직입니다(H.264, GOP 8 안팎, 소리 제거, faststart).
 
-현재 초안에는 `assets/collection.json`의 98점과 기존 22점 사진이 함께 쓰입니다. 기존 22점과 원본 추천 데이터·엑셀은 보존합니다. 나중에 승인된 이미지 수집 결과가 늘어나면 아래 명령으로 공개 컬렉션 데이터를 다시 생성합니다. 검색·필터·소장품 수는 데이터에 따라 갱신됩니다.
+소장품 사진은 `assets/collection.json`에 등록된 데이터에 따라 표시되며, 수집 결과를 반영하면서 늘어납니다. 기존 22점 사진도 함께 보존합니다. 기존 22점과 원본 추천 데이터·엑셀은 보존합니다. 나중에 승인된 이미지 수집 결과가 늘어나면 아래 명령으로 공개 컬렉션 데이터를 다시 생성합니다. 검색·필터·소장품 수는 데이터에 따라 갱신됩니다.
 
 ```bash
 python3 scripts/build_site_data.py --matches image_matching/results/pilot-100/matches.json
 ```
 
-`index.html`, `styles.css`, `app.js`가 초안 화면이고 `assets/`와 `image_matching/public/`가 공개 자산입니다. 이미지 매칭용 Python 코드와 인증키는 브라우저에서 사용하지 않습니다. 로컬 검토 단계이며 원격 저장소 푸시·공개 배포는 별도 진행합니다.
+`index.html`, `styles.css`, `app.js`가 초안 화면이고 `assets/`와 `image_matching/public/`가 공개 자산입니다. 이미지 매칭용 Python 코드와 인증키는 브라우저에서 사용하지 않습니다. 공개 사이트는 GitHub Pages에서 제공하며, 변경 사항을 저장소에 푸시하면 배포에 반영됩니다.
 
 유물 이미지 자동 매칭 모듈과 실행 방법은 [image_matching/README.md](image_matching/README.md)를 참고하세요.
 
