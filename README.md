@@ -23,6 +23,12 @@ python3 scripts/preview.py --port 4173
 
 추천 체험은 미리 계산한 실제 모델 결과(25개 조합)이며 실시간 모델 추론이 아닙니다. 기준 유물 5점의 배경 제거본은 `assets/cutouts/`에 있으며, 원본과 처리 방법은 `cutouts.json`에 기록했습니다.
 
+### 첫 화면 효과와 인트로
+
+- 떠다니는 불빛과 마우스 붓자국은 `app.js` 맨 위쪽 `HERO_FX_INTENSITY` 상수 하나로 세기를 조절합니다(0 = 끔, 1 = 설계 세기, 현재 0.85). 터치 화면에서는 불빛만, 움직임 줄이기 설정에서는 둘 다 꺼집니다.
+- 첫 방문 인트로는 자리만 있습니다. `index.html`의 `<html data-intro="">`에 영상 경로(예: `assets/media/intro.mp4`)를 넣으면, 첫 방문 때 한 번 재생하고 끝나는 순간 첫 화면 반복 영상을 처음 프레임부터 이어 재생합니다. 건너뛰기 버튼과 Esc가 있고, `?intro=1`을 붙이면 다시 볼 수 있습니다. 휴대폰용은 `data-intro-mobile`, 포스터는 `data-intro-poster`.
+- 컷 없이 이어지려면 인트로의 마지막 프레임이 반복 영상의 첫 프레임과 같아야 합니다. 그 프레임은 `media-src/hero-loop-first-frame.png`(공개 사이트에는 올리지 않음)입니다.
+
 ### 생성 미디어 넣기
 
 Higgsfield 등으로 만든 영상·이미지는 `assets/media/`에 두고 `assets/media/manifest.json`의 해당 칸에 경로를 적습니다. 비어 있는 칸은 코드로 그린 배경을 그대로 씁니다.
@@ -44,7 +50,8 @@ Higgsfield 등으로 만든 영상·이미지는 `assets/media/`에 두고 `asse
 | `story-film.mp4` | 15초 1280×720 → H.264 CRF 24, GOP 10, 소리 없음, 5.2MB |
 | `story-film-mobile.mp4` | 같은 영상 960×540, CRF 27, GOP 6, 1.8MB |
 | `story-film-poster.webp` | 위 영상 첫 프레임 |
-| `hero-still.webp` | 반복 영상의 기준 프레임 2688×1520 → 1920폭. 반복 영상이 나오면 `hero.video`로 교체 |
+| `hero-loop.mp4` | 5초 반복 영상 → 끝 0.8초를 처음과 겹쳐 이음매 없는 4.3초 반복, H.264 CRF 23, 소리 없음, 0.5MB |
+| `hero-still.webp` | 반복 영상의 기준 프레임 2688×1520 → 1920폭. 반복 영상이 뜨기 전·움직임 줄이기 설정에서 보이는 포스터 |
 | `vitrine.webp` | 빈 진열장 1792×2240 → 1000폭 |
 | `silk-tile.webp` | 비단 타일 2048 → 640 |
 | `clouds.webp` | 금선 운문 2688×1520 → 1920폭, 바닥글 배경 |

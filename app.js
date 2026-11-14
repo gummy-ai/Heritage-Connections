@@ -249,6 +249,207 @@ class Dust {
   }
 }
 
+/* Hero effects: lantern lights over the backdrop and an ink brush that follows the mouse.
+   One knob sets the strength of the whole layer: 0 turns it off, 1 is the designed strength.
+   Lower it if the copy ever loses legibility. */
+const HERO_FX_INTENSITY = 0.85;
+const hash = n => { const s = Math.sin(n * 12.9898) * 43758.5453; return s - Math.floor(s); };
+
+class HeroFX {
+  constructor(canvas, host) {
+    this.c = canvas;
+    this.g = canvas.getContext('2d');
+    this.host = host;
+    this.k = HERO_FX_INTENSITY;
+    // Touch screens get the lights only; the brush needs a hovering pointer.
+    this.brushOn = matchMedia('(hover: hover) and (pointer: fine)').matches;
+    this.ink = document.createElement('canvas');
+    this.ig = this.ink.getContext('2d');
+    this.tmp = document.createElement('canvas');
+    this.tg = this.tmp.getContext('2d');
+    this.canBlur = 'filter' in this.tg;
+    this.sprites = {
+      light: HeroFX.sprite('255, 248, 228', '236, 212, 160', 64, .18),
+      // Grey ink, a shade lighter than the page's ink black: reads as wash on the misty backdrop.
+      ink: HeroFX.sprite('46, 45, 42', '58, 56, 52', 48, .5),
+      gold: HeroFX.sprite('228, 198, 122', '214, 178, 94', 48, .4),
+    };
+    this.lights = [];
+    this.last = null;
+    this.width = 12;
+    this.seed = Math.random() * 1000;
+    this.travel = 0;
+    this.inkUntil = 0;
+    this.inkDirty = false;
+    this.running = false;
+    this.visible = false;
+    new ResizeObserver(() => this.resize()).observe(canvas);
+    new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; this.sync(); }).observe(host);
+    document.addEventListener('visibilitychange', () => this.sync());
+    if (this.brushOn) {
+      host.addEventListener('pointermove', e => this.onMove(e), { passive: true });
+      host.addEventListener('pointerleave', () => { this.last = null; });
+    }
+  }
+  static sprite(core, edge, size, solid) {
+    const s = document.createElement('canvas');
+    s.width = s.height = size;
+    const g = s.getContext('2d');
+    const h = size / 2;
+    const grad = g.createRadialGradient(h, h, 0, h, h, h);
+    grad.addColorStop(0, `rgba(${core}, 1)`);
+    grad.addColorStop(solid, `rgba(${edge}, .7)`);
+    grad.addColorStop(1, `rgba(${edge}, 0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    return s;
+  }
+  resize() {
+    const w = this.c.clientWidth;
+    const h = this.c.clientHeight;
+    if (!w || !h) return;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    this.w = w;
+    this.h = h;
+    this.c.width = Math.round(w * dpr);
+    this.c.height = Math.round(h * dpr);
+    this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const cv of [this.ink, this.tmp]) { cv.width = w; cv.height = h; }
+    if (this.canBlur) this.tg.filter = 'blur(0.4px)';
+    this.wide = w >= 900;
+    const count = this.wide ? clamp(Math.round((w * h) / 36000), 20, 40) : 20;
+    this.lights = Array.from({ length: count }, () => this.spawnLight(true));
+    this.render(performance.now());
+  }
+  // Where lights may glow: away from the copy (left column on wide screens, lower half on phones).
+  weight(x, y) {
+    return this.wide ? smooth(.28, .6, x) : smooth(.72, .32, y);
+  }
+  spawnLight(anywhere) {
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 40; i++) {
+      x = Math.random();
+      y = anywhere ? .06 + Math.random() * .88 : .9 + Math.random() * .08;
+      if (Math.random() < .03 + .97 * this.weight(x, anywhere ? y : .5)) break;
+    }
+    return {
+      x, y, r: 1.2 + Math.random() * 2.4, vy: .004 + Math.random() * .01,
+      fx: .05 + Math.random() * .12, fy: .04 + Math.random() * .1, ph: Math.random() * 6.283,
+      tw: .35 + Math.random() * 1.1, a: .2 + Math.random() * .35, born: performance.now(),
+    };
+  }
+  onMove(e) {
+    if (e.pointerType === 'touch') return;
+    const r = this.c.getBoundingClientRect();
+    const events = e.getCoalescedEvents?.() || [];
+    for (const ev of events.length ? events : [e]) {
+      const p = { x: ev.clientX - r.left, y: ev.clientY - r.top, t: ev.timeStamp };
+      const last = this.last;
+      if (!last) { this.last = p; this.seed = Math.random() * 1000; continue; }
+      const dist = Math.hypot(p.x - last.x, p.y - last.y);
+      if (dist < 1.5) continue;
+      this.last = p;
+      if (dist > 160) continue;
+      const speed = dist / Math.max(4, p.t - last.t);
+      // Slow: broad, wet, bleeding. Fast: thin, dry, broken (flying white).
+      const target = 2.5 + 26 * (1 - smooth(.05, 1.5, speed));
+      this.width += (target - this.width) * .3;
+      this.stroke(last, p, this.width, smooth(.55, 1.6, speed));
+    }
+  }
+  stroke(a, b, w, dry) {
+    const g = this.ig;
+    const k = this.k;
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const nx = -(b.y - a.y) / dist;
+    const ny = (b.x - a.x) / dist;
+    const wet = 1 - dry;
+    const n = Math.ceil(dist / Math.max(1.2, w * .22));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      if (wet > .02) {
+        const s = w * 1.55;
+        g.globalAlpha = .09 * wet * k;
+        g.drawImage(this.sprites.gold, x - s * .6, y - s * .6, s * 1.2, s * 1.2);
+        g.globalAlpha = .2 * wet * k;
+        g.drawImage(this.sprites.ink, x - s / 2, y - s / 2, s, s);
+      }
+      if (dry > .02) {
+        const chunk = Math.floor((this.travel + dist * t) / 6);
+        for (let j = 0; j < 6; j++) {
+          if (hash(this.seed + j * 7.13 + chunk * 1.7) < .35) continue;
+          const o = (j / 5 - .5) * w * 1.4;
+          const s = Math.max(1.6, w * .35);
+          g.globalAlpha = .45 * dry * k;
+          g.drawImage(this.sprites.ink, x + nx * o - s / 2, y + ny * o - s / 2, s, s);
+        }
+      }
+    }
+    g.globalAlpha = 1;
+    this.travel += dist;
+    this.inkUntil = performance.now() + 2600;
+    this.inkDirty = true;
+  }
+  // Ink spreading in water: a little blur every frame, then an exponential fade (~2 s to vanish).
+  fadeInk(dt) {
+    const g = this.ig;
+    if (this.canBlur) {
+      this.tg.clearRect(0, 0, this.w, this.h);
+      this.tg.drawImage(this.ink, 0, 0);
+      g.clearRect(0, 0, this.w, this.h);
+      g.drawImage(this.tmp, 0, 0);
+    }
+    g.globalCompositeOperation = 'destination-out';
+    g.globalAlpha = 1 - Math.pow(.972, dt / 16.7);
+    g.fillRect(0, 0, this.w, this.h);
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+  }
+  render(t) {
+    const g = this.g;
+    g.clearRect(0, 0, this.w, this.h);
+    if (this.k <= 0) return;
+    if (t < this.inkUntil) g.drawImage(this.ink, 0, 0, this.w, this.h);
+    else if (this.inkDirty) { this.ig.clearRect(0, 0, this.w, this.h); this.inkDirty = false; }
+    g.globalCompositeOperation = 'lighter';
+    const s = t / 1000;
+    for (const p of this.lights) {
+      const x = (p.x + Math.sin(s * p.fx + p.ph) * .012) * this.w;
+      const y = (p.y + Math.cos(s * p.fy + p.ph) * .01) * this.h;
+      const a = p.a * this.k * this.weight(x / this.w, y / this.h) * (.6 + .4 * Math.sin(s * p.tw + p.ph)) * smooth(0, 2500, t - p.born);
+      if (a < .01) continue;
+      const size = p.r * 14;
+      g.globalAlpha = a;
+      g.drawImage(this.sprites.light, x - size / 2, y - size / 2, size, size);
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+  }
+  sync() {
+    const go = this.visible && !document.hidden;
+    if (go && !this.running) {
+      this.running = true;
+      this.prev = 0;
+      requestAnimationFrame(t => this.loop(t));
+    } else if (!go) this.running = false;
+  }
+  loop(t) {
+    if (!this.running) return;
+    const dt = this.prev ? Math.min(50, t - this.prev) : 16.7;
+    this.prev = t;
+    for (const p of this.lights) {
+      p.y -= p.vy * dt / 1000;
+      if (p.y < .02) Object.assign(p, this.spawnLight(false));
+    }
+    if (t < this.inkUntil) this.fadeInk(dt);
+    this.render(t);
+    requestAnimationFrame(tt => this.loop(tt));
+  }
+}
+
 /* Ink-wash mountain range, drawn once per svg ------------------------------ */
 function smoothPath(pts) {
   let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
@@ -313,8 +514,8 @@ function inkRange(svg, seed) {
 /* Hero ------------------------------------------------------------------ */
 function initHero() {
   const groups = inkRange($('#hero-range'), 11);
-  new Dust($('#hero-dust'), { density: .9, pointerTarget: $('#top') });
   if (reduced) return;
+  new HeroFX($('#hero-fx'), $('#top'));
   const obj = $('#hero-object');
   let ticking = false;
   const update = () => {
@@ -328,27 +529,42 @@ function initHero() {
 }
 
 /* Media slots (filled when generated media lands in the manifest) --------- */
+// Mounts a still (poster or image) and, motion allowed, a muted looping video above it.
+// Returns the video element, the still, or null when the slot is empty.
 function mountMedia(slot, spec) {
-  if (!slot || !spec) return false;
+  if (!slot || !spec) return null;
+  let node = null;
+  const still = spec.poster || spec.image;
+  if (still) {
+    node = el('img', { src: still, alt: '', decoding: 'async' });
+    node.addEventListener('load', () => node.classList.add('ready'), { once: true });
+    slot.append(node);
+  }
   if (spec.video && !reduced) {
-    const v = el('video', { muted: true, loop: true, playsinline: true, autoplay: true, preload: 'auto', poster: spec.poster || spec.image || null });
+    const holding = root.classList.contains('intro-pending');
+    const v = el('video', { muted: true, loop: true, playsinline: true, autoplay: !holding, preload: 'auto' });
     v.muted = true;
     v.addEventListener('loadeddata', () => v.classList.add('ready'), { once: true });
     v.src = spec.video;
     slot.append(v);
-    v.play().catch(() => {});
-    return true;
+    if (!holding) v.play().catch(() => {});
+    node = v;
   }
-  const src = spec.image || spec.poster;
-  if (!src) return false;
-  const img = el('img', { src, alt: '', decoding: 'async' });
-  img.addEventListener('load', () => img.classList.add('ready'), { once: true });
-  slot.append(img);
-  return true;
+  return node;
 }
 function applyMedia(m) {
   if (!m) return;
-  if (mountMedia($('#hero-slot'), m.hero)) $('#top').classList.add('has-media');
+  const hero = mountMedia($('#hero-slot'), m.hero);
+  if (hero) $('#top').classList.add('has-media');
+  if (hero?.tagName === 'VIDEO') {
+    store.heroVideo = hero;
+    // Decode the loop only while the hero is on screen.
+    new IntersectionObserver(([e]) => {
+      if (root.classList.contains('intro-pending')) return;
+      if (e.isIntersecting) hero.play().catch(() => {});
+      else hero.pause();
+    }).observe($('#top'));
+  }
   if (mountMedia($('#vitrine-slot'), m.vitrine)) $('#vitrine').classList.add('has-media');
   if (m.textures?.silk) root.style.setProperty('--tex-silk', `url("${m.textures.silk}")`);
   if (m.textures?.clouds) root.style.setProperty('--tex-cloud', `url("${m.textures.clouds}")`);
@@ -1536,8 +1752,48 @@ function initReveals() {
   targets.forEach(t => { if (t.getBoundingClientRect().top > innerHeight) { t.classList.add('reveal'); io.observe(t); } });
 }
 
+/* First-visit intro (slot only until the intro video exists) -------------------
+   <html data-intro="..."> names the clip. The inline head script covers the page before first
+   paint when it will play. The hero loop waits on its first frame and starts the moment the
+   intro ends, so an intro whose last frame matches media-src/hero-loop-first-frame.png
+   hands over without a cut. */
+const INTRO_KEY = 'hc-intro-seen-v1';
+function initIntro() {
+  if (!root.classList.contains('intro-pending')) return;
+  const small = matchMedia('(max-width: 760px)').matches;
+  const src = (small && root.dataset.introMobile) || root.dataset.intro;
+  const video = el('video', { class: 'intro-video', muted: true, playsinline: true, preload: 'auto', poster: root.dataset.introPoster || null, 'aria-hidden': 'true' });
+  video.muted = true;
+  const skip = el('button', { class: 'intro-skip', type: 'button', text: '건너뛰기' });
+  const wrap = el('div', { class: 'intro', role: 'dialog', 'aria-modal': 'true', 'aria-label': '여는 영상' }, video, skip);
+  document.body.append(wrap);
+  let done = false;
+  const onKey = e => { if (e.key === 'Escape') finish(); };
+  function finish() {
+    if (done) return;
+    done = true;
+    try { localStorage.setItem(INTRO_KEY, '1'); } catch { /* storage blocked: the intro may play again */ }
+    removeEventListener('keydown', onKey);
+    const hv = store.heroVideo;
+    if (hv) { hv.currentTime = 0; hv.play().catch(() => {}); }
+    root.classList.remove('intro-pending');
+    // Replay the hero entrance now that it is actually visible.
+    $$('.hero h1 .line, .hero-lede, .cta-begin, .hero-object').forEach(n => { n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
+    wrap.classList.add('leaving');
+    setTimeout(() => wrap.remove(), 900);
+  }
+  addEventListener('keydown', onKey);
+  skip.addEventListener('click', finish);
+  video.addEventListener('ended', finish);
+  video.addEventListener('error', finish);
+  setTimeout(finish, 15000);
+  video.src = src;
+  video.play().then(() => skip.focus({ preventScroll: true })).catch(finish);
+}
+
 /* Boot ------------------------------------------------------------------- */
 initMasthead();
+initIntro();
 initHero();
 initSheets();
 load().then(() => {

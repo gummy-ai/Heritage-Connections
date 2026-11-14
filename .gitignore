@@ -18,3 +18,5 @@ qa-artifacts/
 
 # Local backups of earlier drafts
 .backup/
+# Generation inputs (not site assets)
+media-src/

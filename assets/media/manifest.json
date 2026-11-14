@@ -1,6 +1,6 @@
 {
-  "note": "Generated media slots. Leave a value null until the file exists under assets/media/. The page falls back to its drawn ink-wash scenery for any empty slot. All files here are AI-generated decorative backgrounds, not photographs of real artifacts or places.",
-  "hero": { "image": "assets/media/hero-still.webp", "video": null, "poster": null },
+  "note": "Generated media slots. Leave a value null until the file exists under assets/media/. The page falls back to its drawn ink-wash scenery for any empty slot. All files here are AI-generated decorative backgrounds, not photographs of real artifacts or places. The first-visit intro is configured on <html data-intro> in index.html, not here.",
+  "hero": { "image": null, "video": "assets/media/hero-loop.mp4", "poster": "assets/media/hero-still.webp" },
   "story": { "video": "assets/media/story-film.mp4", "videoMobile": "assets/media/story-film-mobile.mp4", "poster": "assets/media/story-film-poster.webp" },
   "vitrine": { "image": "assets/media/vitrine.webp", "video": null, "poster": null },
   "textures": { "silk": "assets/media/silk-tile.webp", "clouds": "assets/media/clouds.webp" }

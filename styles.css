@@ -589,6 +589,9 @@ html:not(.pinned) .story-chapters { grid-column: 1; grid-row: 1; }
 .paper { margin-top: 36px; padding-top: 22px; display: grid; gap: 6px; border-top: 1px solid var(--line); }
 .paper cite { font: italic 500 1.2rem/1.4 var(--latin); color: var(--paper); }
 .paper span { font-size: .82rem; color: var(--paper-3); }
+.paper small { font-size: .74rem; color: var(--paper-3); }
+.paper-open { position: relative; overflow: hidden; padding: 12px 22px; text-decoration: none; font-weight: 500; color: var(--ink-1); background: var(--gold); border: 1px solid var(--gold); transition: background .3s, box-shadow .3s; }
+.paper-open:hover, .paper-open:focus-visible { background: var(--gold-hi); box-shadow: 0 0 28px rgba(214, 178, 94, .3); }
 .paper-links { margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px; }
 .poster-open { position: relative; overflow: hidden; padding: 12px 22px; cursor: pointer; color: var(--gold-hi); border: 1px solid rgba(214, 178, 94, .55); background: rgba(214, 178, 94, .06); }
 .poster-pdf { font-size: .9rem; color: var(--paper-2); text-underline-offset: 4px; }
@@ -653,6 +656,26 @@ html:not(.pinned) .story-chapters { grid-column: 1; grid-row: 1; }
 .poster-sheet { width: min(940px, calc(100% - 32px)); }
 .poster-sheet .sheet-body img { display: block; width: 100%; height: auto; }
 .noscript { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 80; padding: 12px 16px; background: var(--ink-3); border: 1px solid var(--line-2); font-size: .85rem; }
+
+/* First-visit intro: the page stays covered until the clip ends or is skipped. */
+html.intro-pending, html.intro-pending body { background: #000; }
+html.intro-pending body > :not(.intro) { visibility: hidden; }
+.intro { position: fixed; inset: 0; z-index: 300; background: #000; transition: opacity .8s ease; }
+.intro-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.intro-skip {
+  position: absolute;
+  right: var(--gutter);
+  bottom: calc(28px + env(safe-area-inset-bottom));
+  padding: 10px 18px;
+  cursor: pointer;
+  font-size: .86rem;
+  color: var(--paper);
+  border: 1px solid rgba(232, 225, 208, .4);
+  background: rgba(10, 11, 12, .5);
+  backdrop-filter: blur(6px);
+}
+.intro-skip:hover, .intro-skip:focus-visible { border-color: var(--gold); color: var(--gold-hi); }
+.intro.leaving { opacity: 0; pointer-events: none; }
 
 /* Viewport-entry nudges: transform only, never hidden. */
 .js .reveal { transform: translateY(28px); transition: transform 1.1s var(--ease); }

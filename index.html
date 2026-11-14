@@ -1,5 +1,6 @@
 <!doctype html>
-<html lang="ko">
+<!-- Intro slot: set data-intro to a video path (e.g. assets/media/intro.mp4) to play it once on a first visit. Empty = no intro. -->
+<html lang="ko" data-intro="" data-intro-mobile="" data-intro-poster="">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,14 +8,28 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="국립중앙박물관 소장품을 지식그래프로 잇고, 추천의 이유를 CAFE 해설 가중치로 보여 주는 ETRI × 건국대학교 문화유산 추천 연구.">
   <title>유물과 유물 사이</title>
-  <script>document.documentElement.classList.add('js')</script>
+  <script>
+    (function () {
+      var d = document.documentElement;
+      d.classList.add('js');
+      // Cover the page before first paint when a first-visit intro will play (app.js removes the cover).
+      try {
+        var forced = /[?&]intro=1\b/.test(location.search);
+        var seen = localStorage.getItem('hc-intro-seen-v1') === '1';
+        if (d.dataset.intro && !matchMedia('(prefers-reduced-motion: reduce)').matches && (forced || !seen)) {
+          d.classList.add('intro-pending');
+          setTimeout(function () { d.classList.remove('intro-pending'); }, 9000);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400;1,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap" rel="stylesheet">
   <link rel="preload" as="image" href="./assets/cutouts/moon-jar.webp">
-  <link rel="stylesheet" href="./styles.css?v=20261115-media">
-  <script type="module" src="./app.js?v=20261115-media"></script>
+  <link rel="stylesheet" href="./styles.css?v=20261115-fx">
+  <script type="module" src="./app.js?v=20261115-fx"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">본문으로 바로가기</a>
@@ -43,7 +58,7 @@
         <svg class="ink-range" id="hero-range" viewBox="0 0 1600 640" preserveAspectRatio="xMidYMax slice"></svg>
         <div class="mist mist-a"></div>
         <div class="mist mist-b"></div>
-        <canvas class="dust" id="hero-dust"></canvas>
+        <canvas class="dust" id="hero-fx"></canvas>
       </div>
       <div class="hero-inner">
         <div class="hero-copy">
@@ -191,10 +206,11 @@
             <div><dt>연결</dt><dd data-count="142834">142,834</dd></div>
           </dl>
           <p class="figures-note">2026년 11월 12일 모델 스냅샷 기준</p>
-          <p class="paper"><cite>A Coarse-to-Fine Hierarchical Approach for Cultural Heritage Recommendation</cite><span>Jinyoung Jung · Junsu Kim · Jiwon Lee · Hwijae Son</span></p>
+          <p class="paper"><cite>A Coarse-to-Fine Hierarchical Approach for Cultural Heritage Recommendation</cite><span>Jinyoung Jung* · Junsu Kim* · Jiwon Lee · Hwijae Son†</span><small>* 공동 제1저자 · † 교신저자 · ICTC 2026 논문 2쪽</small></p>
           <div class="paper-links">
+            <a class="paper-open" href="./assets/ictc-2026-paper.pdf?v=20261115" target="_blank" rel="noopener">논문 읽기</a>
             <button class="poster-open" id="poster-open" type="button">포스터 보기</button>
-            <a class="poster-pdf" href="./assets/ictc-2026-poster.pdf?v=2965aea" download>PDF 내려받기</a>
+            <a class="poster-pdf" href="./assets/ictc-2026-poster.pdf?v=2965aea" download>포스터 PDF</a>
           </div>
         </div>
         <figure class="poster">
