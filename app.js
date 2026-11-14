@@ -349,8 +349,8 @@ function mountMedia(slot, spec) {
 function applyMedia(m) {
   if (!m) return;
   if (mountMedia($('#hero-slot'), m.hero)) $('#top').classList.add('has-media');
-  mountMedia($('#vitrine-slot'), m.vitrine);
-  if (m.textures?.silk) root.style.setProperty('--grain', `url("${m.textures.silk}")`);
+  if (mountMedia($('#vitrine-slot'), m.vitrine)) $('#vitrine').classList.add('has-media');
+  if (m.textures?.silk) root.style.setProperty('--tex-silk', `url("${m.textures.silk}")`);
   if (m.textures?.clouds) root.style.setProperty('--tex-cloud', `url("${m.textures.clouds}")`);
 }
 
@@ -365,29 +365,46 @@ function seekFilm(p) {
   if (Math.abs(v.currentTime - t) > .015) v.currentTime = t;
 }
 function initFilm(spec) {
-  if (!spec?.video || reduced) return;
+  if (!spec?.video) return;
+  const story = $('#story');
+  const slot = $('#story-slot');
+  // The first frame stands in until the clip is decoded (and for good under reduced motion).
+  if (spec.poster) {
+    const img = el('img', { src: spec.poster, alt: '', decoding: 'async' });
+    img.addEventListener('load', () => { img.classList.add('ready'); story.classList.add('has-film'); }, { once: true });
+    slot.append(img);
+  }
+  if (reduced) return;
   const small = matchMedia('(max-width: 760px), (pointer: coarse)').matches;
   const url = small && spec.videoMobile ? spec.videoMobile : spec.video;
-  const video = el('video', { muted: true, playsinline: true, preload: 'auto', poster: spec.poster || null });
+  const video = el('video', { muted: true, playsinline: true, preload: 'auto' });
   video.muted = true;
-  $('#story-slot').append(video);
+  slot.append(video);
   video.addEventListener('seeked', () => {
     if (film.pending == null) return;
     const t = film.pending;
     film.pending = null;
     video.currentTime = t;
   });
-  // Blob URLs keep currentTime seekable even when the server ignores Range requests.
-  fetch(url).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); }).then(blob => {
-    video.addEventListener('loadeddata', () => {
-      film.video = video;
-      film.ready = true;
-      video.classList.add('ready');
-      $('#story').classList.add('has-film');
-      seekFilm(film.target);
-    }, { once: true });
-    video.src = URL.createObjectURL(blob);
-  }).catch(() => video.remove());
+  const start = () => {
+    // Blob URLs keep currentTime seekable even when the server ignores Range requests.
+    fetch(url).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); }).then(blob => {
+      video.addEventListener('loadeddata', () => {
+        film.video = video;
+        film.ready = true;
+        video.classList.add('ready');
+        story.classList.add('has-film');
+        seekFilm(film.target);
+      }, { once: true });
+      video.src = URL.createObjectURL(blob);
+    }).catch(() => video.remove());
+  };
+  // Fetch only when the story is about to scroll into view, not on first paint.
+  new IntersectionObserver(([e], obs) => {
+    if (!e.isIntersecting) return;
+    obs.disconnect();
+    start();
+  }, { rootMargin: '120% 0px' }).observe(story);
   addEventListener('touchstart', () => { video.play().then(() => video.pause()).catch(() => {}); }, { once: true, passive: true });
 }
 
@@ -428,10 +445,11 @@ function buildScene(svg, demo) {
     { fam: 'pattern', label: '문양', value: patternValue },
   ];
   const LAYOUTS = {
+    // Right-hand seals sit below the top-right corner, where the story film's moon rises.
     wide: {
       vb: [1600, 900], obj: { cx: 1120, cy: 470, h: 520 },
-      seals: [[1300, 170], [1340, 520], [720, 380]], sides: ['left', 'left', 'right'],
-      anchors: [[.5, .04], [.95, .55], [.06, .42]], recs: [[1500, 330], [1390, 760], [800, 700]],
+      seals: [[1310, 330], [1330, 655], [720, 380]], sides: ['left', 'left', 'right'],
+      anchors: [[.5, .04], [.95, .55], [.06, .42]], recs: [[1480, 480], [1500, 795], [800, 700]],
     },
     tall: {
       vb: [900, 1100], obj: { cx: 450, cy: 440, h: 400 },
@@ -549,9 +567,9 @@ function initStory() {
   const groups = inkRange($('#story-range'), 29);
   const moon = $('.story-moon', story);
   const scene = buildScene($('#story-scene'), store.demo);
+  initFilm(store.manifest?.story);
   if (reduced) { scene.set(1); return; }
   root.classList.add('pinned');
-  initFilm(store.manifest?.story);
   let ticking = false;
   const update = () => {
     ticking = false;
@@ -1375,6 +1393,7 @@ function openCredits() {
   $('#credits-body').replaceChildren(
     el('p', { text: `이 페이지의 유물 사진 ${rows.length}점은 국립중앙박물관이 e뮤지엄으로 공개한 실제 소장품 사진입니다. 각 사진은 소장기관과 소장품번호를 확인해 연결했고, 이용조건은 공공누리 표시를 따릅니다.` }),
     el('p', { text: '첫 화면과 진열장의 기준 유물 5점은 원본 사진의 배경을 지워 사용했습니다. 공공누리 제1유형은 출처를 표시하면 변경 이용을 허락합니다.' }),
+    el('p', { text: '첫 화면·이야기·진열장·바닥글의 배경 영상과 이미지, 비단 질감은 생성형 AI로 만든 장식용 그림입니다. 실제 유물이나 장소를 찍은 것이 아닙니다.' }),
     el('p', {}, el('a', { href: 'https://www.emuseum.go.kr/copyright', target: '_blank', rel: 'noopener noreferrer', text: 'e뮤지엄 저작권 정책' })),
     list,
     el('div', { class: 'collection-more' }, more));
