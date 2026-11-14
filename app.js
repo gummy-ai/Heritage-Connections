@@ -64,7 +64,6 @@ const REL_LABEL = {
   '국적': '국적', '출토지': '출토지', '출토지_상세': '출토지·세부',
 };
 const familyOf = rel => REL_FAMILY[rel] || 'class';
-const INTEREST_LABEL = { all: '관심 없이 보기', goryeo: '고려의 미감', joseon: '조선의 일상', celadon: '청자의 빛', metal: '금속의 공예' };
 const SHORT = { '신수14621': '백자 달항아리', '동원1347': '청자 상감 매병', '동원285': '백자 철화 용무늬 항아리', '신수11349': '청동 투구', '신수10147': '정화팔년명 삼족 향로' };
 const HANJA_NUM = ['一', '二', '三', '四', '五', '六'];
 
@@ -103,7 +102,7 @@ async function load() {
     getJSON('./assets/collection.json'),
     getJSON('./assets/recommendations.json'),
     getJSON('./assets/legacy-images.json'),
-    getJSON('./assets/cutouts/cutouts.json'),
+    getJSON('./assets/cutouts/cutouts.json?v=20261115-helm'),
     getJSON('./assets/recommendation-pool.json'),
   ]);
   if (manifest.status === 'fulfilled') store.manifest = manifest.value;
@@ -644,14 +643,13 @@ function initFilm(spec) {
 }
 
 function pickStoryRecs(demo, seedId) {
-  const pool = [];
-  const seen = new Set();
-  for (const k of ['celadon', 'all', 'goryeo', 'joseon', 'metal']) {
-    for (const r of demo?.scenarios?.[`${seedId}|${k}`]?.recommendations || []) {
-      if (!seen.has(r.id)) { seen.add(r.id); pool.push({ ...demo.catalog[r.id], ...r }); }
-    }
-  }
-  const sharesPattern = (r, v) => r.sharedAttributes?.some(a => a.relation === '문양' && (!v || a.value === v));
+  // Candidates for the story's seed in model order (seed similarity), with their attributes.
+  const sp = store.pool?.seeds?.[seedId];
+  const seedKeys = new Set((demo?.catalog?.[seedId]?.attributes || []).map(a => `${a.relation}|${a.value}`));
+  const pool = (sp ? [...sp.candidates].sort((a, b) => b[2] - a[2] || a[1] - b[1]).map(c => c[0]) : [])
+    .slice(0, 60).map(hk => store.items.get(hk)).filter(Boolean)
+    .map(info => ({ ...info, sharedAttributes: info.attributes.filter(a => seedKeys.has(`${a.relation}|${a.value}`)) }));
+  const sharesPattern = (r, v) => r.sharedAttributes.some(a => a.relation === '문양' && (!v || a.value === v));
   const tests = {
     time: r => r.era === '고려',
     material: r => r.materialDetail === '청자',
@@ -660,14 +658,13 @@ function pickStoryRecs(demo, seedId) {
   const used = new Set();
   const out = {};
   for (const fam of ['pattern', 'time', 'material']) {
-    const cands = pool.filter(r => !used.has(r.id) && tests[fam](r));
+    const cands = pool.filter(r => !used.has(r.headKey) && tests[fam](r));
     const best = (fam === 'pattern' && cands.find(r => sharesPattern(r, '매화') && photoFor(r)))
       || cands.find(r => photoFor(r)) || cands[0];
-    if (best) { used.add(best.id); out[fam] = best; }
+    if (best) { used.add(best.headKey); out[fam] = best; }
   }
   return out;
 }
-
 function buildScene(svg, demo) {
   const seedId = '동원1347';
   const seed = demo?.catalog?.[seedId];
@@ -1210,20 +1207,19 @@ class Constellation {
 }
 
 /* Recommendation engine ------------------------------------------------------
-   The real model ranked a candidate pool per (seed artifact, interest) offline:
-   scripts/export_recommendations.py, original recommend_top_n, web mode V1.
-   The browser filters that pool by the selected attribute chips (OR within one attribute,
-   AND across attributes) and takes six:
-   - RECOMMEND_TEMPERATURE 0: the pool in model order, i.e. the original use_sampling=False
-     path. Same six every time; with no chips this is exactly the stored top six.
-   - above 0: six drawn without replacement with probability softmax(score / T) (Gumbel
-     top-k), the original sampling path but limited to the exported pool.
-   CAFE explanation weights are recomputed for the six actually shown, with the formula of
-   src/importance.py and each edge's exported s_k (verified against Python to 1e-7). */
+   Chips are the seed artifact's own attributes (its triples). Choosing chips is the model's
+   para_sim interest conditioning, exactly as recommend_top_n with relation_id/tail_id lists:
+     score = (1 - para_sim) * cos(seed, item) + para_sim * mean over chosen chips of
+             compute_condition_similarity(item, relation, tail)          (para_sim = 0.4)
+   scripts/export_recommendations.py exported, per seed, every candidate's seed similarity and
+   per-chip condition similarity; the browser ranks them with this formula. Verified against the
+   original recommend_top_n for every single chip, chip pair and whole attribute group (208/208).
+   - RECOMMEND_TEMPERATURE 0: stable descending sort, the original use_sampling=False path.
+   - above 0: six drawn without replacement with probability softmax(score / T) (Gumbel top-k),
+     limited to the exported candidates.
+   CAFE weights are recomputed for the six shown with src/importance.py's formula; the chosen
+   chips get the model's interest boost. */
 const RECOMMEND_TEMPERATURE = 0;
-// Selected chips are the visitor's chosen attributes, so the explanation boosts them like the
-// model's interest (x interest_boost). Set false to boost only the interest story.
-const BOOST_SELECTED_ATTRIBUTES = true;
 
 const FILTER_GROUPS = [
   { key: 'time', label: '시대', glyph: '時', family: 'time', relations: ['시대'] },
@@ -1267,19 +1263,18 @@ function cafeWeights(heads, isBoosted) {
   for (const e of rows) e.weight /= total + 1e-9;
   return rows;
 }
-const anyFilter = () => [...D.filters.values()].some(s => s.size);
-function passesFilters(info) {
-  for (const [gk, vals] of D.filters) {
-    if (!vals.size) continue;
-    const rels = FILTER_GROUPS.find(g => g.key === gk).relations;
-    if (!info.attributes.some(a => rels.includes(a.relation) && vals.has(a.value))) return false;
-  }
-  return true;
+const seedPool = () => store.pool?.seeds?.[D.seed] || null;
+function selectedIdx() {
+  const sp = seedPool();
+  return sp ? sp.chips.map(([r, v], i) => (D.chips.has(`${r}|${v}`) ? i : -1)).filter(i => i >= 0) : [];
 }
-function filteredPool(interestId) {
-  const pool = store.pool?.pools?.[`${D.seed}|${interestId}`];
-  if (!pool) return null;
-  return anyFilter() ? pool.filter(([hk]) => { const info = store.items.get(hk); return info && passesFilters(info); }) : pool;
+// [headKey, score, entityId] in model order: score descending, ties by entity id (stable sort).
+function rankPool(sel) {
+  const sp = seedPool();
+  if (!sp) return null;
+  const ps = store.pool.metadata.scoring.interestWeight;
+  const ranked = sp.candidates.map(([hk, eid, sh, cs]) => [hk, sel.length ? (1 - ps) * sh + ps * sel.reduce((a, i) => a + cs[i], 0) / sel.length : sh, eid]);
+  return ranked.sort((a, b) => b[1] - a[1] || a[2] - b[2]);
 }
 function gumbelTopK(cands, k, T) {
   return cands.map(c => ({ c, key: c[1] / T - Math.log(-Math.log(Math.random() || 1e-12)) }))
@@ -1287,20 +1282,13 @@ function gumbelTopK(cands, k, T) {
 }
 function recommend() {
   const seed = store.demo.catalog[D.seed];
-  const it = interestById(D.interest);
-  const cands = filteredPool(D.interest);
-  if (!cands) {
-    // No exported pool: replay the stored scenario as it is.
-    const sc = store.demo.scenarios[`${D.seed}|${D.interest}`];
-    const recs = sc.recommendations.map(r => ({ ...store.items.get(r.headKey), ...r }));
-    const boostedKeys = new Set(it?.relation ? [`${it.relation}|${it.value}`] : []);
-    return { recs, matched: recs.length, poolSize: recs.length, boostedKeys };
+  const ranked = rankPool(selectedIdx());
+  if (!ranked) {
+    const recs = store.demo.scenarios[`${D.seed}|all`].recommendations.map(r => ({ ...store.items.get(r.headKey), ...r, sharedAttributes: [], chipMatches: 0 }));
+    return { recs, poolSize: recs.length, boostedKeys: new Set() };
   }
-  const picked = RECOMMEND_TEMPERATURE > 0 ? gumbelTopK(cands, 6, RECOMMEND_TEMPERATURE) : cands.slice(0, 6);
-  const heads = picked.map(c => c[0]);
-  const isBoosted = e => Boolean((it?.relation && e.relation === it.relation && e.value === it.value)
-    || (BOOST_SELECTED_ATTRIBUTES && D.filters.get(GROUP_OF_REL[e.relation]?.key)?.has(e.value)));
-  const rows = cafeWeights(heads, isBoosted);
+  const picked = RECOMMEND_TEMPERATURE > 0 ? gumbelTopK(ranked, 6, RECOMMEND_TEMPERATURE) : ranked.slice(0, 6);
+  const rows = cafeWeights(picked.map(c => c[0]), e => D.chips.has(`${e.relation}|${e.value}`));
   const seedKeys = new Set(seed.attributes.map(a => `${a.relation}|${a.value}`));
   const excluded = excludedNodes();
   const recs = picked.map(([hk, score]) => {
@@ -1308,22 +1296,22 @@ function recommend() {
     return {
       ...info, score,
       sharedAttributes: info.attributes.filter(a => seedKeys.has(`${a.relation}|${a.value}`) && !excluded.has(a.value)),
-      interestMatched: Boolean(it?.relation && info.attributes.some(a => a.relation === it.relation && a.value === it.value)),
+      chipMatches: info.attributes.filter(a => D.chips.has(`${a.relation}|${a.value}`)).length,
       explanationEdges: rows.filter(e => e.head === hk).sort((a, b) => b.weight - a.weight)
         .map(({ relation, value, weight }) => ({ relation, value, weight })),
     };
   });
   const boostedKeys = new Set(rows.filter(e => e.boosted).map(e => `${e.relation}|${e.value}`));
-  return { recs, matched: cands.length, poolSize: store.pool.pools[`${D.seed}|${D.interest}`].length, boostedKeys };
+  return { recs, poolSize: ranked.length, boostedKeys };
 }
-// The six the visitor would see with the same chips but no interest story (for rank changes).
+// The six with no chips chosen (for rank changes).
 function baseHeads() {
-  const pool = filteredPool('all');
-  return pool ? pool.slice(0, 6).map(c => c[0]) : store.demo.scenarios[`${D.seed}|all`].recommendations.map(r => r.headKey);
+  const ranked = rankPool([]);
+  return ranked ? ranked.slice(0, 6).map(c => c[0]) : store.demo.scenarios[`${D.seed}|all`].recommendations.map(r => r.headKey);
 }
 
 /* Discover: vitrine, plaques, chips, readout, curator ----------------------- */
-const D = { seed: null, interest: 'all', active: false, filters: new Map(), groups: [], model: null, curator: false, cIndex: 0, auto: null };
+const D = { seed: null, active: false, chips: new Set(), groups: [], model: null, curator: false, cIndex: 0, auto: null };
 let sky = null;
 // Brightest floor spot of the case photo (assets/media/vitrine.webp), measured from the image:
 // lamp x 63.3%, lit floor centred at x 63.7%, y 70.7%. The artifact stands on that spot.
@@ -1339,15 +1327,16 @@ const SLOTS = {
   use: { x: 5, y: 80, ax: .22, ay: .92, side: 'right' },
   place: { x: 5, y: 86, ax: .8, ay: .98, side: 'left' },
 };
-const interestById = id => store.demo.interests.find(i => i.id === id);
-const interestLabel = id => INTEREST_LABEL[id] || interestById(id)?.label || id;
 
+// The seed's chips (its own triples), grouped for the plaques and the chip row.
 function seedGroups(item) {
   const excluded = excludedNodes();
-  return FILTER_GROUPS.map(g => ({
-    ...g,
-    values: [...new Set(item.attributes.filter(a => g.relations.includes(a.relation) && !excluded.has(a.value)).map(a => a.value))],
-  })).filter(g => g.values.length);
+  const triples = seedPool()?.chips.map(([relation, value]) => ({ relation, value }))
+    || item.attributes.filter(a => !excluded.has(a.value));
+  return FILTER_GROUPS.map(g => {
+    const chips = triples.filter(a => g.relations.includes(a.relation)).map(a => ({ ...a, key: `${a.relation}|${a.value}` }));
+    return { ...g, chips, values: chips.map(c => c.value) };
+  }).filter(g => g.chips.length);
 }
 
 function initDiscover() {
@@ -1371,8 +1360,7 @@ function initDiscover() {
   });
   if (matchMedia('(pointer: coarse)').matches) $('#vitrine-hint').textContent = '표찰이나 아래 칩을 눌러 보세요.';
   buildSeedRail();
-  buildLens();
-  $('#filter-clear').addEventListener('click', () => { D.filters.clear(); if (D.active) renderScenario(); else syncFilterState(); });
+  $('#filter-clear').addEventListener('click', () => { D.chips.clear(); if (D.active) renderScenario(); else syncFilterState(); });
   initCurator();
   new Dust($('#vitrine-dust'), { density: 1.6, max: 90, rise: .7, size: [.4, 1.5] });
   const first = demo.baseArtifactIds.includes('동원1347') ? '동원1347' : demo.baseArtifactIds[0];
@@ -1426,7 +1414,7 @@ function buildSeedRail() {
 async function selectSeed(id, { from = null }) {
   if (D.seed === id) return;
   D.seed = id;
-  D.filters.clear();
+  D.chips.clear();
   const item = store.demo.catalog[id];
   $$('.seed').forEach(b => { const on = b.dataset.id === id; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
   const obj = $('#vitrine-obj');
@@ -1473,7 +1461,7 @@ function renderTags(item) {
     const btn = el('button', {
       class: `tag${slot.side === 'left' ? ' from-right' : ''}`, type: 'button', 'aria-pressed': 'false', 'data-group': grp.key,
       style: { '--x': `${slot.x}%`, '--y': `${slot.y}%`, '--c': fam.color, '--delay': `${(.35 + i * .12).toFixed(2)}s` },
-      'aria-label': `${grp.label} ${grp.values.join(', ')}. 이 속성으로 거르기`,
+      'aria-label': `${grp.label} ${grp.values.join(', ')}. 이 속성에 끌림`,
     }, el('span', { class: 'tag-glyph', 'aria-hidden': 'true', text: grp.glyph }), el('span', { class: 'tag-text' }, el('small', { text: grp.label }), el('b', { text })));
     const hot = on => {
       $$('#leaders g')[i]?.classList.toggle('hot', on);
@@ -1529,32 +1517,27 @@ function layoutLeaders() {
 function renderFilterChips() {
   $('#filter-groups').replaceChildren(...D.groups.map(grp => el('div', { class: 'fgroup', style: { '--c': FAMILIES[grp.family].color } },
     el('span', { class: 'fgroup-name' }, el('i', { 'aria-hidden': 'true', text: grp.glyph }), grp.label),
-    el('span', { class: 'fchips' }, grp.values.map(v => {
-      const b = el('button', { class: 'fchip', type: 'button', 'aria-pressed': 'false', 'data-group': grp.key, 'data-value': v, text: v });
-      b.addEventListener('click', () => toggleValue(grp.key, v));
+    el('span', { class: 'fchips' }, grp.chips.map(c => {
+      const b = el('button', { class: 'fchip', type: 'button', 'aria-pressed': 'false', 'data-key': c.key, title: `${REL_LABEL[c.relation] || c.relation} ${c.value}`, text: c.value });
+      b.addEventListener('click', () => toggleChip(c.key));
       return b;
     })))));
   syncFilterState();
 }
 function syncFilterState() {
-  $$('.fchip').forEach(b => b.setAttribute('aria-pressed', String(Boolean(D.filters.get(b.dataset.group)?.has(b.dataset.value)))));
-  $$('.tag').forEach(t => t.setAttribute('aria-pressed', String(Boolean(D.filters.get(t.dataset.group)?.size))));
-  $('#filter-clear').disabled = !anyFilter();
+  $$('.fchip').forEach(b => b.setAttribute('aria-pressed', String(D.chips.has(b.dataset.key))));
+  $$('.tag').forEach(t => t.setAttribute('aria-pressed', String(D.groups.find(g => g.key === t.dataset.group)?.chips.some(c => D.chips.has(c.key)) || false)));
+  $('#filter-clear').disabled = !D.chips.size;
 }
-function toggleValue(gk, value) {
-  const set = D.filters.get(gk) || new Set();
-  if (set.has(value)) set.delete(value); else set.add(value);
-  if (set.size) D.filters.set(gk, set); else D.filters.delete(gk);
+function toggleChip(key) {
+  if (D.chips.has(key)) D.chips.delete(key); else D.chips.add(key);
   activate();
 }
 // A plaque stands for the whole attribute: all of this artifact's values in it, or none.
 function toggleGroup(gk) {
-  if (D.filters.get(gk)?.size) D.filters.delete(gk);
-  else D.filters.set(gk, new Set(D.groups.find(g => g.key === gk).values));
-  activate();
-}
-function selectInterest(id) {
-  D.interest = id;
+  const chips = D.groups.find(g => g.key === gk).chips;
+  if (chips.some(c => D.chips.has(c.key))) chips.forEach(c => D.chips.delete(c.key));
+  else chips.forEach(c => D.chips.add(c.key));
   activate();
 }
 
@@ -1585,30 +1568,18 @@ function flyToChart() {
     .finished.then(() => { sky.hideCenter(false); ghost.remove(); }, () => { sky.hideCenter(false); ghost.remove(); });
 }
 
-function interestNote(id) {
-  const it = interestById(id);
-  const label = interestLabel(id);
-  return `관심 이야기 ‘${label}’(${REL_LABEL[it.relation]} ${it.value})${hasBatchim(label) ? '을' : '를'} 더해 다시 순위를 매겼습니다.`;
-}
 function selectionText() {
-  return FILTER_GROUPS.filter(g => D.filters.get(g.key)?.size).map(g => {
-    const v = [...D.filters.get(g.key)];
-    return `${g.label} ${v.length > 3 ? `${v.slice(0, 2).join('·')} 등 ${v.length}가지 중 하나` : v.join(' 또는 ')}`;
-  }).join(' · ');
+  return D.groups.filter(g => g.chips.some(c => D.chips.has(c.key)))
+    .map(g => `${g.label} ${g.chips.filter(c => D.chips.has(c.key)).map(c => c.value).join(', ')}`).join(' · ');
 }
 function composeNote(model) {
+  const ps = store.pool?.metadata?.scoring?.interestWeight ?? .4;
   const parts = [];
   const sel = selectionText();
-  if (D.interest !== 'all') parts.push(interestNote(D.interest));
-  else if (!sel) parts.push('관심 이야기 없이, 고른 유물과의 가까움만으로 찾은 여섯 점입니다.');
-  if (sel) {
-    const josa = hasBatchim(sel) ? '을' : '를';
-    const all = FILTER_GROUPS.filter(g => D.filters.get(g.key)?.size).length > 1 ? '모두 ' : '';
-    if (!model.recs.length) parts.push(`모델 후보 ${model.poolSize}점 가운데 ${sel}${josa} ${all}갖춘 유물이 없습니다. 칩을 하나 빼 보세요.`);
-    else {
-      const tail = model.recs.length < 6 ? ` 조건에 맞는 후보가 ${model.recs.length}점뿐입니다.` : ` 조건에 맞는 후보는 ${model.matched}점입니다.`;
-      parts.push(`${sel}${josa} ${all}갖춘 유물을 모델 후보 ${model.poolSize}점 가운데 순위대로 ${model.recs.length}점 골랐습니다.${tail}`);
-    }
+  if (!sel) parts.push('끌리는 점을 고르지 않아, 고른 유물과 얼마나 가까운지(임베딩 유사도)만으로 순위를 매긴 여섯 점입니다.');
+  else {
+    const n = D.chips.size;
+    parts.push(`${sel}${hasBatchim(sel) ? '을' : '를'} 관심 조건으로 더해 다시 순위를 매겼습니다. 점수 = ${(1 - ps).toFixed(1)} × 고른 유물과의 유사도 + ${ps.toFixed(1)} × ${n > 1 ? `고른 속성 ${n}개와의 유사도 평균` : '고른 속성과의 유사도'}.`);
   }
   if (RECOMMEND_TEMPERATURE > 0) parts.push(`temperature ${RECOMMEND_TEMPERATURE}로 후보 안에서 확률에 따라 뽑았습니다.`);
   return parts.join(' ');
@@ -1624,33 +1595,12 @@ function renderScenario() {
   $('#chart-empty').hidden = model.recs.length > 0;
   renderReading(famList, model.boostedKeys);
   renderFinds(model.recs, baseHeads());
-  $$('.lens-chip').forEach(b => { const on = b.dataset.id === D.interest; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
   syncFilterState();
   $('#curate-toggle').hidden = !model.recs.length;
   if (D.curator) {
     if (!model.recs.length) toggleCurator(false);
     else { sky.setCurator(true); showCurated(Math.min(D.cIndex, model.recs.length - 1)); }
   }
-}
-
-function buildLens() {
-  const chips = $('#lens-chips');
-  chips.replaceChildren(...store.demo.interests.map((it, i) => {
-    const b = el('button', { class: 'lens-chip', type: 'button', role: 'radio', 'aria-checked': 'false', tabindex: i === 0 ? 0 : -1, 'data-id': it.id },
-      el('span', { text: interestLabel(it.id) }), it.relation ? el('small', { text: `${REL_LABEL[it.relation]} ${it.value}` }) : null);
-    b.addEventListener('click', () => selectInterest(it.id));
-    return b;
-  }));
-  chips.addEventListener('keydown', e => {
-    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-    if (!step) return;
-    e.preventDefault();
-    const btns = $$('.lens-chip', chips);
-    const i = Math.max(0, btns.findIndex(b => b.getAttribute('aria-checked') === 'true'));
-    const next = btns[(i + step + btns.length) % btns.length];
-    next.focus();
-    next.click();
-  });
 }
 
 function renderReading(famList, boostedKeys) {
@@ -1694,15 +1644,15 @@ function plate(item, cls, full = false) {
 function renderFinds(recs, baseList) {
   const host = $('#finds');
   if (!recs.length) {
-    host.replaceChildren(el('li', { class: 'finds-empty', text: '고른 속성을 모두 갖춘 유물이 후보 안에 없습니다.' }));
+    host.replaceChildren(el('li', { class: 'finds-empty', text: '추천 자료를 불러오지 못했습니다.' }));
     return;
   }
   host.replaceChildren(...recs.map((r, i) => {
     const why = r.explanationEdges.slice(0, 3)
       .map(e => el('span', { style: { '--c': FAMILIES[familyOf(e.relation)].color }, title: `${REL_LABEL[e.relation] || e.relation} ${e.value}`, text: e.value }));
     const flags = [];
-    if (D.interest !== 'all') {
-      if (r.interestMatched) flags.push(el('span', { class: 'flag interest', text: '관심 일치' }));
+    if (D.chips.size) {
+      if (r.chipMatches) flags.push(el('span', { class: 'flag interest', text: r.chipMatches === D.chips.size ? '고른 속성 모두 지님' : `고른 속성 ${r.chipMatches}개 지님` }));
       const j = baseList.indexOf(r.headKey);
       if (j < 0) flags.push(el('span', { class: 'flag new', text: '새로 등장' }));
       else flags.push(el('span', { class: 'flag', text: j > i ? `${j - i}계단 위로` : j < i ? `${i - j}계단 아래로` : '순위 그대로' }));
@@ -1772,7 +1722,7 @@ function curatorNote(r) {
     const list = shared.slice(0, 3).join(', ') + (shared.length > 3 ? ' 등' : '');
     s += ` ${seedName}${wa} ${list}${hasBatchim(list) ? '을' : '를'} 함께 지녔습니다.`;
   } else s += ` ${seedName}${wa} 겹치는 속성은 없지만, 모델이 배운 연결에서 가깝게 놓였습니다.`;
-  if (D.interest !== 'all' && r.interestMatched) s += ` 고른 관심 이야기 ‘${interestLabel(D.interest)}’에도 맞습니다.`;
+  if (D.chips.size && r.chipMatches) s += ` 고른 끌리는 점 가운데 ${r.chipMatches}개를 지녔습니다.`;
   return s;
 }
 function showCurated(i) {

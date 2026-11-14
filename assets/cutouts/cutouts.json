@@ -1,11 +1,32 @@
 {
-  "note": "Seed artifact photos used in the hero and vitrine. Four use background-removed copies; the bronze helmet uses the unmodified museum photograph to preserve its outline. Source photos, credits, and licences are listed in assets/legacy-images.json (KOGL Type 1, attribution; modification permitted).",
+  "note": "Background-removed copies of the five seed artifact photos, used in the hero and the vitrine. Source photos, credits, and licences are listed in assets/legacy-images.json (KOGL Type 1, attribution; modification permitted).",
   "method": "Local GrabCut segmentation (OpenCV) seeded from border colour or a hand-measured silhouette, feathered alpha, cropped. No generative fill or retouching.",
   "items": [
-    { "id": "신수14621", "file": "assets/cutouts/moon-jar.webp", "source": "assets/legacy/moon-jar.webp" },
-    { "id": "동원1347", "file": "assets/cutouts/celadon-vase.webp", "source": "assets/legacy/celadon-vase.webp" },
-    { "id": "동원285", "file": "assets/cutouts/dragon-jar.webp", "source": "assets/legacy/dragon-jar.webp" },
-    { "id": "신수11349", "file": "assets/legacy/bronze-helmet.webp", "source": "assets/legacy/bronze-helmet.webp", "presentation": "original-photograph", "note": "Use the unmodified museum photograph: the segmented copy clips the helmet outline. Collection number and official source verified against NMK relicId=4359." },
-    { "id": "신수10147", "file": "assets/cutouts/bronze-incense.webp", "source": "assets/legacy/bronze-incense.webp" }
+    {
+      "id": "신수14621",
+      "file": "assets/cutouts/moon-jar.webp",
+      "source": "assets/legacy/moon-jar.webp"
+    },
+    {
+      "id": "동원1347",
+      "file": "assets/cutouts/celadon-vase.webp",
+      "source": "assets/legacy/celadon-vase.webp"
+    },
+    {
+      "id": "동원285",
+      "file": "assets/cutouts/dragon-jar.webp",
+      "source": "assets/legacy/dragon-jar.webp"
+    },
+    {
+      "id": "신수11349",
+      "file": "assets/cutouts/bronze-helmet.webp?v=20261115-helm",
+      "source": "assets/legacy/bronze-helmet.webp",
+      "note": "Recut 2026-11-15: background-difference mask clipped to the helmet region, floor and cast shadow excluded; the full outline matches the museum photograph (relicId=4359)."
+    },
+    {
+      "id": "신수10147",
+      "file": "assets/cutouts/bronze-incense.webp",
+      "source": "assets/legacy/bronze-incense.webp"
+    }
   ]
 }

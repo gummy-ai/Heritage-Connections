@@ -31,11 +31,11 @@ python3 scripts/preview.py --port 4173
 
 ### 추천 체험의 계산
 
-- 추천은 미리 계산한 실제 모델 결과입니다. `scripts/export_recommendations.py`가 원본 모델(`online-learning/2026-09-05`, 읽기 전용)의 `recommend_top_n`·`compute_importance`로 `assets/recommendations.json`(기준 5점 × 관심 5종의 상위 6점)과 `assets/recommendation-pool.json`(조합마다 후보 120점의 순위와 각 연결의 CAFE 원점수 s_k)을 만듭니다.
-- 순위는 RotatE 임베딩 유사도(관심 이야기가 있으면 0.6 × 유물 유사도 + 0.4 × 관심 조건 유사도)이고, CAFE는 그 순위의 이유를 설명하는 가중치입니다. temperature 0(= 원본 `use_sampling=False`)으로 내보내 같은 선택에는 늘 같은 결과가 나옵니다. 2026-11-15 재생성 결과는 이전 파일과 25개 조합 모두 같았습니다.
-- 브라우저는 속성 칩(같은 속성 안은 OR, 다른 속성끼리는 AND)으로 후보를 걸러 순위대로 6점을 고르고, `src/importance.py`와 같은 식으로 CAFE를 다시 계산합니다(파이썬 원본과 차이 1e-7 이하). 고른 칩과 관심 이야기의 연결은 해설에서 5배 무게를 받습니다.
-- 조절용 상수(`app.js`): `RECOMMEND_TEMPERATURE`(0 = 고정 순위, 0보다 크면 후보 안에서 softmax(점수/T) 비복원 추출), `BOOST_SELECTED_ATTRIBUTES`, `SWAY_INTENSITY`(가중치 선 살랑임, 0 = 멈춤), `VITRINE_LIGHT`(진열장 사진의 빛 위치, 측정값 x 63.7%·y 70.7%), `CURATOR_AUTOPLAY_MS`.
-- 다시 내보내기: `/path/online-learning/2026-09-05/.venv-report/bin/python scripts/export_recommendations.py --project /path/online-learning/2026-09-05 --output /tmp/rec-export --temperature 0` 후 두 JSON을 `assets/`로 복사합니다.
+- 추천은 미리 계산한 실제 모델 결과입니다. `scripts/export_recommendations.py`가 원본 모델(`online-learning/2026-09-05`, 읽기 전용)로 `assets/recommendations.json`(기준 유물별 기본 상위 6점)과 `assets/recommendation-pool.json`(기준 유물별 칩, 후보마다 기준 유물 유사도와 칩별 조건 유사도, CAFE 원점수 s_k)을 만듭니다.
+- "이 유물에서 끌리는 점" 칩은 기준 유물이 실제로 가진 트리플입니다. 칩을 고르면 모델의 관심 조건(para_sim 0.4)이 됩니다: 점수 = 0.6 × 기준 유물과의 코사인 유사도 + 0.4 × 고른 칩들의 조건 유사도 평균(`recommend_top_n`에 relation_id/tail_id 목록을 넣은 것과 같음). 칩 1개, 2개 조합, 속성 묶음 전체 208가지에서 원본 상위 6점과 모두 일치함을 확인했습니다.
+- temperature 0(= 원본 `use_sampling=False`)이라 같은 선택에는 늘 같은 결과가 나옵니다. CAFE 해설 가중치는 화면의 6점에 대해 `src/importance.py`와 같은 식으로 다시 계산하며(차이 1e-7 이하), 고른 칩의 연결은 5배 무게를 받습니다.
+- 조절용 상수(`app.js`): `RECOMMEND_TEMPERATURE`, `SWAY_INTENSITY`, `VITRINE_LIGHT`(진열장 사진의 빛 위치 x 63.7%·y 70.7%), `CURATOR_AUTOPLAY_MS`.
+- 다시 내보내기: `/path/online-learning/2026-09-05/.venv-report/bin/python scripts/export_recommendations.py --project /path/online-learning/2026-09-05 --output /tmp/rec-export --verify` 후 두 JSON을 `assets/`로 복사합니다.
 
 ### 생성 미디어 넣기
 

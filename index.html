@@ -28,8 +28,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400;1,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap" rel="stylesheet">
   <link rel="preload" as="image" href="./assets/cutouts/moon-jar.webp">
-  <link rel="stylesheet" href="./styles.css?v=20261115-cur">
-  <script type="module" src="./app.js?v=20261115-cur"></script>
+  <link rel="stylesheet" href="./styles.css?v=20261115-para">
+  <script type="module" src="./app.js?v=20261115-para"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">본문으로 바로가기</a>
@@ -109,7 +109,7 @@
     <section class="discover" id="discover" aria-labelledby="discover-title">
       <div class="discover-head">
         <h2 id="discover-title">마음이 가는 유물을 고르세요</h2>
-        <p>유물을 고르면 진열장에 불이 켜집니다. 시대·재질·문양 표찰 가운데 하나를 누르면, 그 연결을 따라 찾은 여섯 점이 별자리처럼 펼쳐집니다.</p>
+        <p>유물을 고르면 진열장에 불이 켜집니다. 끌리는 속성 표찰을 누르면, 그 속성을 관심으로 더해 다시 찾은 여섯 점이 별자리처럼 펼쳐집니다.</p>
       </div>
 
       <div class="seed-rail" id="seed-rail" role="radiogroup" aria-label="기준 유물 다섯 점"></div>
@@ -157,19 +157,15 @@
             </section>
           </div>
           <p class="chart-dormant" id="chart-dormant">표찰이나 아래 칩을 누르면 연결의 별자리가 켜집니다</p>
-          <p class="chart-empty" id="chart-empty" hidden>고른 속성을 모두 갖춘 유물이 후보 안에 없습니다. 칩을 하나 빼 보세요.</p>
+          <p class="chart-empty" id="chart-empty" hidden>추천 자료를 불러오지 못했습니다.</p>
         </div>
       </div>
 
       <div class="controls" id="controls">
         <div class="control-row">
-          <span class="control-label" id="filter-label">속성 거르기</span>
+          <span class="control-label" id="filter-label">이 유물에서 끌리는 점</span>
           <div class="filter-groups" id="filter-groups" role="group" aria-labelledby="filter-label"></div>
           <button class="filter-clear" id="filter-clear" type="button" disabled>모두 해제</button>
-        </div>
-        <div class="control-row">
-          <span class="control-label" id="lens-label">관심 이야기</span>
-          <div class="lens-chips" id="lens-chips" role="radiogroup" aria-labelledby="lens-label"></div>
         </div>
         <p class="lens-note" id="lens-note" aria-live="polite"></p>
       </div>
@@ -193,8 +189,8 @@
 
       <details class="method-note">
         <summary>이 체험은 어떻게 계산되었나요</summary>
-        <p>실제 학습 모델(RotatE 임베딩)이 기준 유물 5점 × 관심 이야기 5종마다 후보 유물 120점의 순위를 미리 매겨 두었습니다. 웹 모드 V1, 샘플링 끔(temperature 0)이라 같은 선택에는 늘 같은 결과가 나오며, 실시간 추론은 아닙니다.</p>
-        <p>속성 칩을 고르면 이 후보 가운데 같은 속성 안에서는 하나라도, 다른 속성끼리는 모두 갖춘 유물만 남기고 순위대로 여섯 점을 보여 줍니다. 해설 가중치(CAFE)는 화면의 여섯 점을 두고 원본 모델과 같은 식으로 다시 계산합니다. 관심 이야기와 고른 속성의 연결은 해설에서 5배의 무게를 받은 뒤 다시 정규화됩니다.</p>
+        <p>실제 학습 모델(RotatE 임베딩)로 기준 유물마다 후보 유물의 점수를 미리 계산해 두었습니다. 웹 모드 V1, 샘플링 끔(temperature 0)이라 같은 선택에는 늘 같은 결과가 나오며, 실시간 추론은 아닙니다.</p>
+        <p>칩은 고른 유물이 실제로 가진 속성입니다. 칩을 고르면 모델의 관심 조건(para_sim 0.4)으로 들어가, 점수 = 0.6 × 고른 유물과의 유사도 + 0.4 × 고른 속성들과의 유사도 평균으로 순위를 다시 매깁니다. 원본 모델과 같은 결과인지 칩 조합 208가지로 확인했습니다. 해설 가중치(CAFE)는 화면의 여섯 점을 두고 원본과 같은 식으로 계산하며, 고른 속성의 연결은 5배 무게를 받습니다.</p>
       </details>
     </section>
 

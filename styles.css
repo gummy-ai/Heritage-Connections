@@ -465,7 +465,7 @@ html:not(.pinned) .story-chapters { grid-column: 1; grid-row: 1; }
 .flyer { position: fixed; z-index: 60; pointer-events: none; margin: 0; filter: drop-shadow(0 20px 30px rgba(0, 0, 0, .6)); }
 
 .controls { margin-top: 16px; display: grid; gap: 12px; padding: 16px 18px; border: 1px solid var(--line); background: rgba(255, 255, 255, .015); }
-.control-row { display: grid; grid-template-columns: 5.6em minmax(0, 1fr) auto; align-items: start; gap: 10px 16px; }
+.control-row { display: grid; grid-template-columns: 8.4em minmax(0, 1fr) auto; align-items: start; gap: 10px 16px; }
 .control-label { padding-top: 7px; font-size: .8rem; color: var(--paper-3); }
 .filter-groups { display: flex; flex-wrap: wrap; gap: 10px 22px; }
 .fgroup { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
