@@ -1,0 +1,20 @@
+
+
+# Local credentials: never publish
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+# Private API responses, checkpoints, and local reports
+image_matching/.private/
+image_matching/results/
+__pycache__/
+*.pyc
+.venv/
+qa-artifacts/
+
+# Local backups of earlier drafts
+.backup/

@@ -1,0 +1,7 @@
+{
+  "note": "Generated media slots. Leave a value null until the file exists under assets/media/. The page falls back to its drawn ink-wash scenery for any empty slot.",
+  "hero": { "image": null, "video": null, "poster": null },
+  "story": { "video": null, "videoMobile": null, "poster": null },
+  "vitrine": { "image": null, "video": null, "poster": null },
+  "textures": { "silk": null, "clouds": null }
+}
