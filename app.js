@@ -86,7 +86,7 @@ const eraOrNation = item => item.era || attrValues(item, '국적')[0] || '';
 const metaLine = item => [eraOrNation(item), item.materialDetail || item.material].filter(Boolean).join(' · ');
 
 /* Data ------------------------------------------------------------------ */
-const store = { manifest: null, demo: null, collection: [], cutouts: {}, photos: new Map() };
+const store = { manifest: null, demo: null, pool: null, items: new Map(), collection: [], cutouts: {}, photos: new Map() };
 const keyOf = item => item.headKey || `artifact::${item.institution || '국립중앙박물관'}::${item.id}`;
 const photoFor = item => store.photos.get(keyOf(item));
 const licenseLabel = l => (typeof l === 'string' ? l : l?.label || '');
@@ -98,15 +98,28 @@ async function getJSON(url) {
 }
 
 async function load() {
-  const [manifest, coll, demo, legacy, cutouts] = await Promise.allSettled([
+  const [manifest, coll, demo, legacy, cutouts, pool] = await Promise.allSettled([
     getJSON('./assets/media/manifest.json'),
     getJSON('./assets/collection.json'),
     getJSON('./assets/recommendations.json'),
     getJSON('./assets/legacy-images.json'),
     getJSON('./assets/cutouts/cutouts.json'),
+    getJSON('./assets/recommendation-pool.json'),
   ]);
   if (manifest.status === 'fulfilled') store.manifest = manifest.value;
   if (demo.status === 'fulfilled') store.demo = demo.value;
+  if (pool.status === 'fulfilled') store.pool = pool.value;
+  // One table of artifact info by headKey: the stored catalog plus every pooled candidate.
+  for (const c of Object.values(store.demo?.catalog || {})) store.items.set(c.headKey, { ...c });
+  for (const [hk, p] of Object.entries(store.pool?.items || {})) {
+    const known = store.items.get(hk);
+    if (known) { known.edges = p.edges; continue; }
+    store.items.set(hk, {
+      id: p.id, headKey: hk, institution: hk.split('::')[1] || '', name: p.name, era: p.era,
+      material: p.material, materialDetail: p.materialDetail, description: p.description,
+      attributes: p.attributes.map(([relation, value]) => ({ relation, value })), edges: p.edges,
+    });
+  }
   if (cutouts.status === 'fulfilled') for (const c of cutouts.value.items) store.cutouts[c.id] = c;
   const seen = new Set();
   if (coll.status === 'fulfilled') {
@@ -565,7 +578,13 @@ function applyMedia(m) {
       else hero.pause();
     }).observe($('#top'));
   }
-  if (mountMedia($('#vitrine-slot'), m.vitrine)) $('#vitrine').classList.add('has-media');
+  if (mountMedia($('#vitrine-slot'), m.vitrine)) {
+    const v = $('#vitrine');
+    v.classList.add('has-media');
+    // Stand the artifact on the case photo's lit floor (measured, see VITRINE_LIGHT).
+    v.style.setProperty('--lx', `${(VITRINE_LIGHT.x * 100).toFixed(1)}%`);
+    v.style.setProperty('--ly', `${(VITRINE_LIGHT.y * 100).toFixed(1)}%`);
+  }
   if (m.textures?.silk) root.style.setProperty('--tex-silk', `url("${m.textures.silk}")`);
   if (m.textures?.clouds) root.style.setProperty('--tex-cloud', `url("${m.textures.clouds}")`);
 }
@@ -812,7 +831,11 @@ function initStory() {
 }
 
 /* Constellation: CAFE weights as a star chart ----------------------------- */
-const C = { center: 82, tickIn: 96, tickOut: 106, ringA: 92, ringB: 112, famLabel: 132, arc: 154, star: 206, rec: 392, recR: 44 };
+const C = { center: 82, tickIn: 96, tickOut: 106, ringA: 92, ringB: 112, famLabel: 132, arc: 154, star: 206, rec: 392, recR: 44, line: 404 };
+// Weight lines sway like grass in a breeze: only the middle control points move, by at most
+// 1.5% of a line's length, thick lines less. Width and brightness never change with the sway.
+// 0 keeps the lines still; prefers-reduced-motion always does.
+const SWAY_INTENSITY = 1;
 
 class Constellation {
   constructor(svg, { onOpen, onHighlight }) {
@@ -821,16 +844,28 @@ class Constellation {
     this.onHighlight = onHighlight;
     this.stars = new Map();
     this.recs = new Map();
+    this.order = [];
+    this.links = [];
     this.data = null;
+    this.curating = false;
+    this.visible = false;
+    this.running = false;
     const defs = sv('defs', {},
       sv('radialGradient', { id: 'c-center-fill' }, sv('stop', { offset: '0', 'stop-color': '#252c33' }), sv('stop', { offset: '1', 'stop-color': '#0e1012' })),
       sv('radialGradient', { id: 'c-glow' }, sv('stop', { offset: '0', 'stop-color': 'rgba(255, 236, 196, .22)' }), sv('stop', { offset: '1', 'stop-color': 'rgba(255, 236, 196, 0)' })),
+      // Warm pool of light behind each photo; the photo multiplies into it so studio backdrops melt away.
+      sv('radialGradient', { id: 'c-plate', cx: '.5', cy: '.46', r: '.62' },
+        sv('stop', { offset: '0', 'stop-color': '#ddd4c3' }), sv('stop', { offset: '.58', 'stop-color': '#8d877c' }), sv('stop', { offset: '1', 'stop-color': '#202124' })),
       sv('clipPath', { id: 'c-clip' }, sv('circle', { r: C.recR })));
     this.L = {};
-    for (const name of ['static', 'arcs', 'spokes', 'links', 'stars', 'labels', 'recs', 'center']) this.L[name] = sv('g', {});
+    for (const name of ['static', 'arcs', 'spokes', 'links', 'hits', 'stars', 'labels', 'recs', 'center']) this.L[name] = sv('g', { class: `c-layer-${name}` });
     svg.append(defs, ...Object.values(this.L));
     this.drawStatic();
     this.drawCenter();
+    if (!reduced && SWAY_INTENSITY > 0) {
+      new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; this.syncSway(); }).observe(svg);
+      document.addEventListener('visibilitychange', () => this.syncSway());
+    }
   }
   drawStatic() {
     const g = this.L.static;
@@ -868,14 +903,24 @@ class Constellation {
     path.style.transition = `stroke-dashoffset ${dur}ms cubic-bezier(.2,.7,.1,1) ${delay}ms, opacity .35s`;
     raf2(() => { path.style.strokeDashoffset = '0'; });
   }
+  // Ring slot (or, in curator mode, a place on the walking line) of rank i among n.
+  slot(i, n, curating = this.curating) {
+    if (curating) {
+      const span = Math.min(760, 152 * (n - 1));
+      return [n > 1 ? -span / 2 + (span * i) / (n - 1) : 0, C.line];
+    }
+    return P(n === 6 ? -60 + i * 60 : -90 + (360 * (i + .5)) / n, C.rec);
+  }
 
-  update(sc, { seedAttrs, interestKey, lens }) {
+  update(recs, { seedAttrs, boosted }) {
     const values = new Map();
+    let minEdge = Infinity;
     let maxEdge = 0;
-    sc.recommendations.forEach(r => r.explanationEdges.forEach(e => {
+    recs.forEach(r => r.explanationEdges.forEach(e => {
       const key = `${e.relation}|${e.value}`;
       if (!values.has(key)) values.set(key, { key, relation: e.relation, value: e.value, family: familyOf(e.relation), weight: 0, shared: seedAttrs.has(key) });
       values.get(key).weight += e.weight;
+      minEdge = Math.min(minEdge, e.weight);
       maxEdge = Math.max(maxEdge, e.weight);
     }));
     const fams = new Map();
@@ -903,47 +948,46 @@ class Constellation {
       f.end = a;
       a += GAP;
     }
-    const maxV = Math.max(...ordered.map(v => v.weight));
+    const maxV = ordered.length ? Math.max(...ordered.map(v => v.weight)) : 1;
     this.data = { values, famList, ordered };
-    this.drawArcs(famList, lens);
-    this.drawSpokes(ordered, lens);
-    this.drawStars(ordered, maxV, interestKey, lens);
-    this.drawLabels(ordered, maxV, interestKey);
-    this.drawRecs(sc.recommendations);
-    this.drawLinks(sc.recommendations, values, maxEdge, lens);
-    this.svg.classList.toggle('lensing', Boolean(lens));
+    this.order = recs.map(r => r.headKey);
+    this.drawArcs(famList);
+    this.drawSpokes(ordered);
+    this.drawStars(ordered, maxV, boosted);
+    this.drawLabels(ordered, maxV, boosted);
+    this.drawRecs(recs);
+    this.drawLinks(recs, values, minEdge, maxEdge);
     this.highlight({});
     return { famList, ordered };
   }
-  drawArcs(famList, lens) {
+  drawArcs(famList) {
     const g = this.L.arcs;
     g.replaceChildren();
     famList.forEach((f, i) => {
       const meta = FAMILIES[f.family];
       const [x0, y0] = P(f.start, C.arc);
       const [x1, y1] = P(f.end, C.arc);
-      const lensCls = lens === f.family ? ' lens' : '';
-      const path = sv('path', { class: `c-arc${lensCls}`, 'data-family': f.family, style: { '--c': meta.color },
+      const path = sv('path', { class: 'c-arc', 'data-family': f.family, style: { '--c': meta.color },
         d: `M${x0.toFixed(1)},${y0.toFixed(1)} A${C.arc},${C.arc} 0 ${f.end - f.start > 180 ? 1 : 0} 1 ${x1.toFixed(1)},${y1.toFixed(1)}` });
       g.append(path);
       this.draw(path, 250 + i * 110, 900);
       const span = f.end - f.start;
       if (span < 9) return;
       const [lx, ly] = P((f.start + f.end) / 2, C.famLabel);
-      g.append(sv('text', { class: `c-famlabel${lensCls}`, 'data-family': f.family, x: lx.toFixed(1), y: ly.toFixed(1), style: { '--c': meta.color },
+      g.append(sv('text', { class: 'c-famlabel', 'data-family': f.family, x: lx.toFixed(1), y: ly.toFixed(1), style: { '--c': meta.color },
         text: span > 26 ? `${meta.label} ${pct(f.total)}` : meta.label }));
     });
   }
-  drawSpokes(ordered, lens) {
+  drawSpokes(ordered) {
     const g = this.L.spokes;
     g.replaceChildren();
     ordered.filter(v => v.shared).forEach(v => {
       const [x1, y1] = P(v.ang, C.ringB + 4);
       const [x2, y2] = P(v.ang, C.star - 10);
-      g.append(sv('line', { class: `c-spoke${lens === v.family ? ' lens' : ''}`, 'data-key': v.key, 'data-family': v.family, x1, y1, x2, y2, style: { '--c': FAMILIES[v.family].color } }));
+      g.append(sv('line', { class: 'c-spoke', 'data-key': v.key, 'data-family': v.family, x1, y1, x2, y2, style: { '--c': FAMILIES[v.family].color } }));
     });
   }
-  drawStars(ordered, maxV, interestKey, lens) {
+  drawStars(ordered, maxV, boosted) {
     const g = this.L.stars;
     const seen = new Set();
     ordered.forEach((v, i) => {
@@ -960,14 +1004,15 @@ class Constellation {
         g.append(node);
         this.stars.set(v.key, node);
       }
-      node.setAttribute('class', `c-star${v.shared ? '' : ' hollow'}${v.key === interestKey ? ' interest' : ''}${lens === v.family ? ' lens' : ''}`);
+      const on = boosted.has(v.key);
+      node.setAttribute('class', `c-star${v.shared ? '' : ' hollow'}${on ? ' interest' : ''}`);
       node.dataset.key = v.key;
       node.dataset.family = v.family;
       node.style.setProperty('--c', FAMILIES[v.family].color);
       $('.halo', node).setAttribute('r', Math.max(10, r * 2.1).toFixed(1));
       $('.core', node).setAttribute('r', r.toFixed(1));
       let ring = $('.ring', node);
-      if (v.key === interestKey) {
+      if (on) {
         if (!ring) { ring = sv('circle', { class: 'ring' }); node.insertBefore(ring, $('title', node)); }
         ring.setAttribute('r', (r + 5).toFixed(1));
       } else ring?.remove();
@@ -984,14 +1029,13 @@ class Constellation {
       setTimeout(() => node.remove(), 500);
     }
   }
-  drawLabels(ordered, maxV, interestKey) {
+  drawLabels(ordered, maxV, boosted) {
     const g = this.L.labels;
     g.replaceChildren();
     // Matches the CSS font size of .c-vlabel (larger on phones).
     const fs = matchMedia('(max-width: 760px)').matches ? 26 : 15;
     const chosen = [...ordered].sort((a, b) => b.weight - a.weight).slice(0, fs > 15 ? 6 : 8);
-    const iv = interestKey && ordered.find(v => v.key === interestKey);
-    if (iv && !chosen.includes(iv)) chosen.unshift(iv);
+    ordered.filter(v => boosted.has(v.key) && !chosen.includes(v)).forEach(v => chosen.unshift(v));
     const boxes = [];
     chosen.forEach(v => {
       const r = 3.5 + 13 * Math.sqrt(v.weight / maxV);
@@ -1005,7 +1049,7 @@ class Constellation {
       const box = [x0, ty - fs, x0 + w, ty + 4];
       if (boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
       boxes.push(box);
-      g.append(sv('text', { class: `c-vlabel${v.key === interestKey ? ' interest' : ''}`, 'data-key': v.key, 'data-family': v.family, x: x.toFixed(1), y: ty.toFixed(1), 'text-anchor': anchor, text: v.value }));
+      g.append(sv('text', { class: `c-vlabel${boosted.has(v.key) ? ' interest' : ''}`, 'data-key': v.key, 'data-family': v.family, x: x.toFixed(1), y: ty.toFixed(1), 'text-anchor': anchor, text: v.value }));
     });
     if (!reduced) g.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 700, delay: 700, fill: 'backwards' });
   }
@@ -1013,147 +1057,297 @@ class Constellation {
     const g = this.L.recs;
     const seen = new Set();
     recs.forEach((r, i) => {
-      seen.add(r.id);
-      const [x, y] = P(-60 + i * 60, C.rec);
-      let node = this.recs.get(r.id);
+      seen.add(r.headKey);
+      let node = this.recs.get(r.headKey);
       const fresh = !node;
       if (fresh) {
         node = this.makeRec(r);
         node.style.transform = 'translate(0px, 0px) scale(.25)';
         node.style.opacity = '0';
         g.append(node);
-        this.recs.set(r.id, node);
+        this.recs.set(r.headKey, node);
       }
-      const name = $('.name', node);
-      const meta = $('.meta', node);
-      const above = y < -40;
-      name.setAttribute('y', above ? -C.recR - 30 : C.recR + 26);
-      meta.setAttribute('y', above ? -C.recR - 12 : C.recR + 44);
-      $('.rank', node).textContent = HANJA_NUM[i];
-      node.setAttribute('aria-label', `추천 ${i + 1}위 ${name.dataset.full}. 자세히 보기`);
-      const apply = () => { node.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`; node.style.opacity = ''; };
-      if (fresh && !reduced) { node.style.transitionDelay = `${420 + i * 90}ms`; raf2(apply); } else { node.style.transitionDelay = '0ms'; apply(); }
+      $('.rank', node).textContent = HANJA_NUM[i] || String(i + 1);
+      node.setAttribute('aria-label', `추천 ${i + 1}위 ${r.name}. 자세히 보기`);
+      this.place(node, i, recs.length, fresh ? 420 + i * 90 : 0);
     });
-    for (const [id, node] of this.recs) {
-      if (seen.has(id)) continue;
-      this.recs.delete(id);
+    for (const [key, node] of this.recs) {
+      if (seen.has(key)) continue;
+      this.recs.delete(key);
       node.style.transitionDelay = '0ms';
       node.style.opacity = '0';
       node.style.transform = 'translate(0px, 0px) scale(.25)';
       setTimeout(() => node.remove(), 800);
     }
   }
+  place(node, i, n, delay = 0) {
+    const [x, y] = this.slot(i, n);
+    const above = y < -40;
+    $('.name', node).setAttribute('y', above ? -C.recR - 30 : C.recR + 26);
+    $('.meta', node).setAttribute('y', above ? -C.recR - 12 : C.recR + 44);
+    const apply = () => { node.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`; node.style.opacity = ''; };
+    node.style.transitionDelay = `${delay}ms`;
+    if (delay && !reduced) raf2(apply); else apply();
+  }
   makeRec(r) {
-    const item = { ...store.demo.catalog[r.id], ...r };
-    const photo = photoFor(item);
+    const photo = photoFor(r);
     const bx = -C.recR * .76;
-    const node = sv('g', { class: 'c-rec', tabindex: 0, role: 'button', 'data-id': r.id },
-      sv('circle', { class: 'disk', r: C.recR }),
-      photo ? sv('image', { href: photo.thumb || photo.image, x: -C.recR, y: -C.recR, width: C.recR * 2, height: C.recR * 2, preserveAspectRatio: 'xMidYMid slice', 'clip-path': 'url(#c-clip)' })
-        : sv('text', { class: 'glyph', text: glyphFor(item) }),
-      sv('circle', { class: 'ring', r: C.recR + 4 }),
+    const R = C.recR;
+    const node = sv('g', { class: 'c-rec', tabindex: 0, role: 'button', 'data-key': r.headKey },
+      sv('circle', { class: `disk${photo ? ' lit' : ''}`, r: R }),
+      photo ? sv('image', { class: 'plate-img', href: photo.thumb || photo.image, x: -R * .92, y: -R * .92, width: R * 1.84, height: R * 1.84, preserveAspectRatio: 'xMidYMid meet', 'clip-path': 'url(#c-clip)' })
+        : sv('text', { class: 'glyph', text: glyphFor(r) }),
+      sv('circle', { class: 'ring', r: R + 4 }),
       sv('circle', { class: 'badge', cx: bx, cy: bx, r: 12 }),
       sv('text', { class: 'rank', x: bx, y: bx }),
-      sv('text', { class: 'name', x: 0, 'data-full': item.name, text: short(item.name, 9) }),
-      sv('text', { class: 'meta', x: 0, text: [metaLine(item), photo ? '' : '사진 미수록'].filter(Boolean).join(' · ') }),
-      sv('title', { text: item.name }));
-    node.addEventListener('pointerenter', () => this.highlight({ rec: r.id }));
+      sv('text', { class: 'name', x: 0, text: short(r.name, 9) }),
+      sv('text', { class: 'meta', x: 0, text: [metaLine(r), photo ? '' : '사진 미수록'].filter(Boolean).join(' · ') }),
+      sv('title', { text: r.name }));
+    node.addEventListener('pointerenter', () => this.highlight({ rec: r.headKey }));
     node.addEventListener('pointerleave', () => this.highlight({}));
-    node.addEventListener('focus', () => this.highlight({ rec: r.id }));
+    node.addEventListener('focus', () => this.highlight({ rec: r.headKey }));
     node.addEventListener('blur', () => this.highlight({}));
-    node.addEventListener('click', () => this.onOpen(r.id));
-    node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.onOpen(r.id); } });
+    node.addEventListener('click', () => this.onOpen(r.headKey));
+    node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.onOpen(r.headKey); } });
     return node;
   }
-  drawLinks(recs, values, maxEdge, lens) {
+  // Lines keep a weight-proportional width in screen pixels: normalised over the shown six, 1 px to 6 px.
+  drawLinks(recs, values, minEdge, maxEdge) {
     const g = this.L.links;
+    const hits = this.L.hits;
     g.replaceChildren();
+    hits.replaceChildren();
+    this.links = [];
+    const span = Math.max(1e-12, maxEdge - minEdge);
     recs.forEach((r, i) => {
-      const deg = -60 + i * 60;
-      const [rx, ry] = P(deg, C.rec - C.recR - 6);
+      const deg = recs.length === 6 ? -60 + i * 60 : -90 + (360 * (i + .5)) / recs.length;
+      const [ex, ey] = P(deg, C.rec - C.recR - 6);
       const [c2x, c2y] = P(deg, C.rec - C.recR - 80);
+      const set = sv('g', { class: 'c-linkset' });
+      g.append(set);
       r.explanationEdges.forEach(e => {
         const key = `${e.relation}|${e.value}`;
         const v = values.get(key);
         if (!v) return;
         const [sx, sy] = P(v.ang, C.star);
         const [c1x, c1y] = P(v.ang, C.star + 80);
-        const path = sv('path', {
-          class: `c-link${lens === v.family ? ' lens' : ''}`, 'data-rec': r.id, 'data-key': key, 'data-family': v.family,
-          d: `M${sx.toFixed(1)},${sy.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${rx.toFixed(1)},${ry.toFixed(1)}`,
-          'stroke-width': (.6 + 6.5 * e.weight / maxEdge).toFixed(2), style: { '--c': FAMILIES[v.family].color },
+        const norm = (e.weight - minEdge) / span;
+        const d = `M${sx.toFixed(1)},${sy.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`;
+        const path = sv('path', { class: 'c-link', d, 'data-rec': r.headKey, 'data-key': key, 'data-family': v.family,
+          style: { '--c': FAMILIES[v.family].color, '--w': `${(1 + 5 * norm).toFixed(2)}px` } });
+        const hit = sv('path', { class: 'c-hit', d, 'data-rec': r.headKey });
+        hit.addEventListener('pointerenter', () => this.highlight({ rec: r.headKey }));
+        hit.addEventListener('pointerleave', () => this.highlight({}));
+        hit.addEventListener('click', () => this.onOpen(r.headKey));
+        set.append(path);
+        hits.append(hit);
+        const len = Math.hypot(ex - sx, ey - sy) || 1;
+        this.links.push({
+          path, hit, sx, sy, ex, ey, c1x, c1y, c2x, c2y, nx: -(ey - sy) / len, ny: (ex - sx) / len,
+          amp: len * .015 * (1 - .65 * norm) * SWAY_INTENSITY, omega: (2 * Math.PI) / (4 + Math.random() * 3),
+          phase: Math.random() * 6.283, gain: 1, hot: false,
         });
-        g.append(path);
-        this.draw(path, 650 + i * 90, 1100);
       });
+      if (!reduced) set.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 900, delay: 650 + i * 90, easing: 'ease-out', fill: 'backwards' });
     });
+    this.syncSway();
+  }
+  syncSway() {
+    const go = this.visible && !document.hidden && this.links.length > 0 && !reduced && SWAY_INTENSITY > 0;
+    if (go && !this.running) {
+      this.running = true;
+      requestAnimationFrame(t => this.sway(t));
+    } else if (!go) this.running = false;
+  }
+  sway(t) {
+    if (!this.running) return;
+    const s = t / 1000;
+    for (const L of this.links) {
+      // Hovered lines and the curator's walk hold almost still so they read crisply.
+      const target = this.curating ? .04 : L.hot ? .05 : 1;
+      L.gain += (target - L.gain) * .07;
+      const o1 = L.amp * L.gain * Math.sin(s * L.omega + L.phase);
+      const o2 = L.amp * L.gain * Math.sin(s * L.omega + L.phase + .9);
+      const d = `M${L.sx.toFixed(1)},${L.sy.toFixed(1)} C${(L.c1x + L.nx * o1).toFixed(2)},${(L.c1y + L.ny * o1).toFixed(2)} ${(L.c2x + L.nx * o2).toFixed(2)},${(L.c2y + L.ny * o2).toFixed(2)} ${L.ex.toFixed(1)},${L.ey.toFixed(1)}`;
+      L.path.setAttribute('d', d);
+      L.hit.setAttribute('d', d);
+    }
+    requestAnimationFrame(tt => this.sway(tt));
+  }
+  setCurator(on) {
+    this.curating = on;
+    this.svg.classList.toggle('curating', on);
+    if (on) this.highlight({});
+    const n = this.order.length;
+    this.order.forEach((key, i) => { const node = this.recs.get(key); if (node) this.place(node, i, n, on ? i * 60 : (n - i) * 50); });
+  }
+  setCurrent(key) {
+    for (const [k, node] of this.recs) node.classList.toggle('current', k === key);
   }
   highlight({ rec = null, value = null, family = null } = {}) {
+    if (this.curating) { rec = null; value = null; family = null; }
     const on = Boolean(rec || value || family);
     this.svg.classList.toggle('focusing', on);
     const hotKeys = new Set();
     const hotRecs = new Set();
-    if (on && this.data) {
-      $$('.c-link', this.L.links).forEach(l => {
-        const hot = (rec && l.dataset.rec === rec) || (value && l.dataset.key === value) || (family && l.dataset.family === family);
-        l.classList.toggle('hot', Boolean(hot));
-        if (hot) { hotKeys.add(l.dataset.key); hotRecs.add(l.dataset.rec); }
-      });
-      if (rec) hotRecs.add(rec);
-      if (value) hotKeys.add(value);
-    } else $$('.c-link.hot', this.L.links).forEach(l => l.classList.remove('hot'));
+    for (const L of this.links) {
+      const l = L.path;
+      const hot = on && Boolean((rec && l.dataset.rec === rec) || (value && l.dataset.key === value) || (family && l.dataset.family === family));
+      l.classList.toggle('hot', hot);
+      L.hot = hot;
+      if (hot) { hotKeys.add(l.dataset.key); hotRecs.add(l.dataset.rec); }
+    }
+    if (rec) hotRecs.add(rec);
+    if (value) hotKeys.add(value);
     const hotFams = new Set([...hotKeys].map(k => this.data?.values.get(k)?.family));
     if (family) hotFams.add(family);
     for (const [key, node] of this.stars) node.classList.toggle('hot', hotKeys.has(key) || (family != null && node.dataset.family === family));
-    for (const [id, node] of this.recs) node.classList.toggle('hot', hotRecs.has(id));
+    for (const [key, node] of this.recs) node.classList.toggle('hot', hotRecs.has(key));
     $$('.c-vlabel, .c-spoke', this.svg).forEach(n => n.classList.toggle('hot', hotKeys.has(n.dataset.key)));
     $$('.c-arc, .c-famlabel', this.svg).forEach(n => n.classList.toggle('hot', hotFams.has(n.dataset.family)));
     this.onHighlight?.({ on, hotKeys, hotRecs });
   }
 }
 
-/* Discover: vitrine, plaques, lens, readout ------------------------------- */
-const D = { seed: null, interest: 'all', active: false, focus: null, tagKey: null, tags: [], note: '' };
-let sky = null;
-// Plaques hug the vitrine edges. side: which edge the leader leaves from
-// ('left' = plaque sits on the right wall, 'right' = plaque sits on the left wall).
-const SLOTS = [
-  { x: 6, y: 15, ax: .5, ay: .03, side: 'left' },
-  { x: 4, y: 58, ax: .95, ay: .55, side: 'left' },
-  { x: 4, y: 44, ax: .06, ay: .42, side: 'right' },
-  { x: 6, y: 15, ax: .35, ay: .06, side: 'right' },
+/* Recommendation engine ------------------------------------------------------
+   The real model ranked a candidate pool per (seed artifact, interest) offline:
+   scripts/export_recommendations.py, original recommend_top_n, web mode V1.
+   The browser filters that pool by the selected attribute chips (OR within one attribute,
+   AND across attributes) and takes six:
+   - RECOMMEND_TEMPERATURE 0: the pool in model order, i.e. the original use_sampling=False
+     path. Same six every time; with no chips this is exactly the stored top six.
+   - above 0: six drawn without replacement with probability softmax(score / T) (Gumbel
+     top-k), the original sampling path but limited to the exported pool.
+   CAFE explanation weights are recomputed for the six actually shown, with the formula of
+   src/importance.py and each edge's exported s_k (verified against Python to 1e-7). */
+const RECOMMEND_TEMPERATURE = 0;
+// Selected chips are the visitor's chosen attributes, so the explanation boosts them like the
+// model's interest (x interest_boost). Set false to boost only the interest story.
+const BOOST_SELECTED_ATTRIBUTES = true;
+
+const FILTER_GROUPS = [
+  { key: 'time', label: '시대', glyph: '時', family: 'time', relations: ['시대'] },
+  { key: 'material', label: '재질', glyph: '材', family: 'material', relations: ['재질 1', '재질 2'] },
+  { key: 'pattern', label: '문양', glyph: '紋', family: 'pattern', relations: ['문양'] },
+  { key: 'form', label: '형태', glyph: '形', family: 'class', relations: ['유물분류 4'] },
+  { key: 'use', label: '용도', glyph: '用', family: 'class', relations: ['유물분류 2', '유물분류 3'] },
+  { key: 'place', label: '국적·출토지', glyph: '處', family: 'place', relations: ['국적', '출토지', '출토지_상세'] },
 ];
+const GROUP_OF_REL = Object.fromEntries(FILTER_GROUPS.flatMap(g => g.relations.map(r => [r, g])));
+const REL_PROSE = {
+  '시대': '시대', '재질 1': '재질', '재질 2': '세부 재질', '문양': '문양', '유물분류 1': '분류', '유물분류 2': '용도',
+  '유물분류 3': '세부 용도', '유물분류 4': '형태', '국적': '국적', '출토지': '출토지', '출토지_상세': '출토지',
+};
+const excludedNodes = () => new Set(store.pool?.metadata?.excludeNodes || ['한국']);
+
+function cafeWeights(heads, isBoosted) {
+  const rel = store.pool.relations;
+  const gamma = store.pool.metadata?.scoring?.gamma ?? 1;
+  const boost = store.pool.metadata?.scoring?.interestExplanationBoost ?? 5;
+  const rows = [];
+  for (const head of heads) for (const [ri, value, s] of store.items.get(head)?.edges || []) rows.push({ head, relation: rel[ri], value, s });
+  const byRel = new Map();
+  for (const e of rows) {
+    let g = byRel.get(e.relation);
+    if (!g) byRel.set(e.relation, g = { sumExp: 0, sumS: 0, n: 0 });
+    g.sumExp += Math.exp(e.s / gamma);
+    g.sumS += e.s;
+    g.n += 1;
+  }
+  let relTotal = 0;
+  for (const g of byRel.values()) { g.score = Math.exp(g.sumS / g.n / gamma); relTotal += g.score; }
+  let total = 0;
+  for (const e of rows) {
+    const g = byRel.get(e.relation);
+    e.weight = (g.score / relTotal) * (Math.exp(e.s / gamma) / g.sumExp);
+    e.boosted = isBoosted(e);
+    if (e.boosted) e.weight *= boost;
+    total += e.weight;
+  }
+  for (const e of rows) e.weight /= total + 1e-9;
+  return rows;
+}
+const anyFilter = () => [...D.filters.values()].some(s => s.size);
+function passesFilters(info) {
+  for (const [gk, vals] of D.filters) {
+    if (!vals.size) continue;
+    const rels = FILTER_GROUPS.find(g => g.key === gk).relations;
+    if (!info.attributes.some(a => rels.includes(a.relation) && vals.has(a.value))) return false;
+  }
+  return true;
+}
+function filteredPool(interestId) {
+  const pool = store.pool?.pools?.[`${D.seed}|${interestId}`];
+  if (!pool) return null;
+  return anyFilter() ? pool.filter(([hk]) => { const info = store.items.get(hk); return info && passesFilters(info); }) : pool;
+}
+function gumbelTopK(cands, k, T) {
+  return cands.map(c => ({ c, key: c[1] / T - Math.log(-Math.log(Math.random() || 1e-12)) }))
+    .sort((a, b) => b.key - a.key).slice(0, k).map(x => x.c);
+}
+function recommend() {
+  const seed = store.demo.catalog[D.seed];
+  const it = interestById(D.interest);
+  const cands = filteredPool(D.interest);
+  if (!cands) {
+    // No exported pool: replay the stored scenario as it is.
+    const sc = store.demo.scenarios[`${D.seed}|${D.interest}`];
+    const recs = sc.recommendations.map(r => ({ ...store.items.get(r.headKey), ...r }));
+    const boostedKeys = new Set(it?.relation ? [`${it.relation}|${it.value}`] : []);
+    return { recs, matched: recs.length, poolSize: recs.length, boostedKeys };
+  }
+  const picked = RECOMMEND_TEMPERATURE > 0 ? gumbelTopK(cands, 6, RECOMMEND_TEMPERATURE) : cands.slice(0, 6);
+  const heads = picked.map(c => c[0]);
+  const isBoosted = e => Boolean((it?.relation && e.relation === it.relation && e.value === it.value)
+    || (BOOST_SELECTED_ATTRIBUTES && D.filters.get(GROUP_OF_REL[e.relation]?.key)?.has(e.value)));
+  const rows = cafeWeights(heads, isBoosted);
+  const seedKeys = new Set(seed.attributes.map(a => `${a.relation}|${a.value}`));
+  const excluded = excludedNodes();
+  const recs = picked.map(([hk, score]) => {
+    const info = store.items.get(hk);
+    return {
+      ...info, score,
+      sharedAttributes: info.attributes.filter(a => seedKeys.has(`${a.relation}|${a.value}`) && !excluded.has(a.value)),
+      interestMatched: Boolean(it?.relation && info.attributes.some(a => a.relation === it.relation && a.value === it.value)),
+      explanationEdges: rows.filter(e => e.head === hk).sort((a, b) => b.weight - a.weight)
+        .map(({ relation, value, weight }) => ({ relation, value, weight })),
+    };
+  });
+  const boostedKeys = new Set(rows.filter(e => e.boosted).map(e => `${e.relation}|${e.value}`));
+  return { recs, matched: cands.length, poolSize: store.pool.pools[`${D.seed}|${D.interest}`].length, boostedKeys };
+}
+// The six the visitor would see with the same chips but no interest story (for rank changes).
+function baseHeads() {
+  const pool = filteredPool('all');
+  return pool ? pool.slice(0, 6).map(c => c[0]) : store.demo.scenarios[`${D.seed}|all`].recommendations.map(r => r.headKey);
+}
+
+/* Discover: vitrine, plaques, chips, readout, curator ----------------------- */
+const D = { seed: null, interest: 'all', active: false, filters: new Map(), groups: [], model: null, curator: false, cIndex: 0, auto: null };
+let sky = null;
+// Brightest floor spot of the case photo (assets/media/vitrine.webp), measured from the image:
+// lamp x 63.3%, lit floor centred at x 63.7%, y 70.7%. The artifact stands on that spot.
+const VITRINE_LIGHT = { x: .637, y: .707 };
+// Plaques hug the vitrine walls. side: the plaque's edge the leader leaves from
+// ('left' = plaque on the right wall, 'right' = plaque on the left wall). The artifact stands
+// right of centre under the light, so most plaques sit on the roomier left wall.
+const SLOTS = {
+  time: { x: 5, y: 12, ax: .62, ay: .02, side: 'left' },
+  form: { x: 5, y: 14, ax: .3, ay: .06, side: 'right' },
+  material: { x: 4, y: 36, ax: .12, ay: .3, side: 'right' },
+  pattern: { x: 4, y: 58, ax: .06, ay: .55, side: 'right' },
+  use: { x: 5, y: 80, ax: .22, ay: .92, side: 'right' },
+  place: { x: 5, y: 86, ax: .8, ay: .98, side: 'left' },
+};
 const interestById = id => store.demo.interests.find(i => i.id === id);
 const interestLabel = id => INTEREST_LABEL[id] || interestById(id)?.label || id;
 
-function seedTags(item) {
-  const tags = [];
-  const era = attrValues(item, '시대')[0];
-  const nation = attrValues(item, '국적')[0];
-  if (era) tags.push({ family: 'time', relation: '시대', value: era, label: '시대', text: era });
-  else if (nation) tags.push({ family: 'place', relation: '국적', value: nation, label: '국적', text: nation });
-  const m1 = attrValues(item, '재질 1')[0];
-  const m2 = attrValues(item, '재질 2')[0];
-  if (m1 || m2) tags.push({ family: 'material', relation: m2 ? '재질 2' : '재질 1', value: m2 || m1, m1, m2, label: '재질', text: [m1, m2].filter(Boolean).join(' · ') });
-  const pats = attrValues(item, '문양');
-  if (pats.length) {
-    tags.push({ family: 'pattern', relation: '문양', value: pats[0], multi: pats.length > 1, label: '문양', text: pats.slice(0, 2).join(' · ') + (pats.length > 2 ? ` 외 ${pats.length - 2}` : '') });
-  } else {
-    const k4 = attrValues(item, '유물분류 4')[0];
-    const k3 = attrValues(item, '유물분류 3')[0];
-    const kind = k4 && k4.length > 1 ? k4 : k3 || k4;
-    if (kind) tags.push({ family: 'class', relation: kind === k4 ? '유물분류 4' : '유물분류 3', value: kind, label: '분류', text: kind });
-  }
-  tags.forEach(t => { t.key = `${t.relation}|${t.value}`; });
-  return tags;
-}
-function interestFor(tag) {
-  for (const it of store.demo.interests) {
-    if (!it.relation) continue;
-    if (tag.family === 'time' && it.relation === '시대' && it.value === tag.value) return it.id;
-    if (tag.family === 'material' && ((it.relation === '재질 2' && it.value === tag.m2) || (it.relation === '재질 1' && it.value === tag.m1))) return it.id;
-  }
-  return null;
+function seedGroups(item) {
+  const excluded = excludedNodes();
+  return FILTER_GROUPS.map(g => ({
+    ...g,
+    values: [...new Set(item.attributes.filter(a => g.relations.includes(a.relation) && !excluded.has(a.value)).map(a => a.value))],
+  })).filter(g => g.values.length);
 }
 
 function initDiscover() {
@@ -1163,19 +1357,23 @@ function initDiscover() {
     return;
   }
   sky = new Constellation($('#constellation'), {
-    onOpen: id => {
-      const sc = demo.scenarios[`${D.seed}|${D.interest}`];
-      const i = sc.recommendations.findIndex(r => r.id === id);
-      openArtifact({ ...demo.catalog[id], ...sc.recommendations[i] }, { rank: i + 1, rec: sc.recommendations[i] });
+    onOpen: key => {
+      const recs = D.model?.recs || [];
+      const i = recs.findIndex(r => r.headKey === key);
+      if (i < 0) return;
+      if (D.curator) { showCurated(i); return; }
+      openArtifact(recs[i], { rank: i + 1, rec: recs[i] });
     },
     onHighlight: ({ on, hotKeys, hotRecs }) => {
-      $$('.find').forEach(f => f.classList.toggle('hot', on && hotRecs.has(f.dataset.id)));
+      $$('.find').forEach(f => f.classList.toggle('hot', on && hotRecs.has(f.dataset.key)));
       $$('.value-chip').forEach(c => c.classList.toggle('hot', on && hotKeys.has(c.dataset.key)));
     },
   });
-  if (matchMedia('(pointer: coarse)').matches) $('#vitrine-hint').textContent = '표찰 하나를 눌러 보세요.';
+  if (matchMedia('(pointer: coarse)').matches) $('#vitrine-hint').textContent = '표찰이나 아래 칩을 눌러 보세요.';
   buildSeedRail();
   buildLens();
+  $('#filter-clear').addEventListener('click', () => { D.filters.clear(); if (D.active) renderScenario(); else syncFilterState(); });
+  initCurator();
   new Dust($('#vitrine-dust'), { density: 1.6, max: 90, rise: .7, size: [.4, 1.5] });
   const first = demo.baseArtifactIds.includes('동원1347') ? '동원1347' : demo.baseArtifactIds[0];
   selectSeed(first, {});
@@ -1184,7 +1382,7 @@ function initDiscover() {
     obs.disconnect();
     light();
   }, { threshold: .3 }).observe($('#vitrine'));
-  addEventListener('resize', layoutLeaders);
+  new ResizeObserver(() => layoutLeaders()).observe($('#vitrine'));
 }
 
 function light() {
@@ -1197,7 +1395,7 @@ function light() {
     $$('.tag').forEach((t, i) => setTimeout(() => {
       t.classList.add('shine');
       setTimeout(() => t.classList.remove('shine'), 900);
-    }, i * 380));
+    }, i * 300));
   }, 1500);
 }
 
@@ -1228,6 +1426,7 @@ function buildSeedRail() {
 async function selectSeed(id, { from = null }) {
   if (D.seed === id) return;
   D.seed = id;
+  D.filters.clear();
   const item = store.demo.catalog[id];
   $$('.seed').forEach(b => { const on = b.dataset.id === id; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
   const obj = $('#vitrine-obj');
@@ -1239,22 +1438,14 @@ async function selectSeed(id, { from = null }) {
   obj.alt = `${SHORT[id] || item.name}. ${metaLine(item)}, 국립중앙박물관 ${id}`;
   try { await obj.decode(); } catch { /* keep going with whatever loaded */ }
   if (D.seed !== id) return;
-  $('#vitrine-label').replaceChildren(
-    el('span', {}, el('b', { text: SHORT[id] || item.name }), metaLine(item)),
-    el('span', { text: `국립중앙박물관 ${id}` }));
+  $('#vitrine-label').replaceChildren(el('span', {}, el('b', { text: SHORT[id] || item.name }), `${metaLine(item)} · 국립중앙박물관 ${id}`));
   renderTags(item);
   sky.setCenter(src);
   if (from) {
     light();
     if (firstRect) flip(obj, firstRect);
   }
-  if (D.active) {
-    // A plaque belongs to the previous artifact: keep the interest, drop the plaque lens.
-    if (D.interest === 'all') D.focus = null;
-    D.tagKey = D.tags.find(t => interestFor(t) === D.interest)?.key || null;
-    D.note = interestNote(D.interest);
-    renderScenario();
-  }
+  if (D.active) renderScenario();
 }
 
 function flip(node, first) {
@@ -1270,20 +1461,20 @@ function flip(node, first) {
 }
 
 function renderTags(item) {
-  D.tags = seedTags(item);
+  D.groups = seedGroups(item);
   const wrap = $('#tags');
   const glints = $('#glints');
   wrap.replaceChildren();
   glints.replaceChildren();
-  D.tags.forEach((tag, i) => {
-    const slot = SLOTS[i];
-    const fam = FAMILIES[tag.family];
-    const lensable = interestFor(tag);
+  D.groups.forEach((grp, i) => {
+    const slot = SLOTS[grp.key];
+    const fam = FAMILIES[grp.family];
+    const text = grp.values.slice(0, 2).join(' · ') + (grp.values.length > 2 ? ` 외 ${grp.values.length - 2}` : '');
     const btn = el('button', {
-      class: `tag${slot.side === 'left' ? ' from-right' : ''}`, type: 'button', 'aria-pressed': 'false', 'data-key': tag.key,
-      style: { '--x': `${slot.x}%`, '--y': `${slot.y}%`, '--c': fam.color, '--delay': `${(.35 + i * .14).toFixed(2)}s` },
-      'aria-label': `${tag.label} ${tag.text}. ${lensable ? '이 속성을 관심 이야기로 더한 추천 보기' : '이 관계의 연결을 밝혀 보기'}`,
-    }, el('span', { class: 'tag-glyph', 'aria-hidden': 'true', text: fam.glyph }), el('span', { class: 'tag-text' }, el('small', { text: tag.label }), el('b', { text: tag.text })));
+      class: `tag${slot.side === 'left' ? ' from-right' : ''}`, type: 'button', 'aria-pressed': 'false', 'data-group': grp.key,
+      style: { '--x': `${slot.x}%`, '--y': `${slot.y}%`, '--c': fam.color, '--delay': `${(.35 + i * .12).toFixed(2)}s` },
+      'aria-label': `${grp.label} ${grp.values.join(', ')}. 이 속성으로 거르기`,
+    }, el('span', { class: 'tag-glyph', 'aria-hidden': 'true', text: grp.glyph }), el('span', { class: 'tag-text' }, el('small', { text: grp.label }), el('b', { text })));
     const hot = on => {
       $$('#leaders g')[i]?.classList.toggle('hot', on);
       glints.children[i]?.classList.toggle('on', on);
@@ -1294,76 +1485,76 @@ function renderTags(item) {
         v.classList.add('flash');
         setTimeout(() => v.classList.remove('flash'), 750);
       }
-      if (D.active) sky.highlight(on ? { family: tag.family } : {});
+      if (D.active) sky.highlight(on ? { family: grp.family } : {});
     };
     btn.addEventListener('pointerenter', () => hot(true));
     btn.addEventListener('pointerleave', () => hot(false));
     btn.addEventListener('focus', () => hot(true));
     btn.addEventListener('blur', () => hot(false));
-    btn.addEventListener('click', () => chooseTag(tag));
+    btn.addEventListener('click', () => toggleGroup(grp.key));
     wrap.append(btn);
     glints.append(el('span', { class: 'glint' }));
   });
-  renderTagState();
+  renderFilterChips();
   raf2(layoutLeaders);
 }
 
 function layoutLeaders() {
   const svg = $('#leaders');
   const obj = $('#vitrine-obj');
-  const tags = $$('.tag');
+  const kase = $('#case');
   if (!obj.offsetWidth || getComputedStyle(svg).display === 'none') return;
-  const ox = obj.offsetLeft;
-  const oy = obj.offsetTop;
+  // The case is centred with auto margins; the artifact is centred on the light with translate: -50% 0.
+  const ox = kase.offsetLeft + obj.offsetLeft - obj.offsetWidth / 2;
+  const oy = kase.offsetTop + obj.offsetTop;
   const ow = obj.offsetWidth;
   const oh = obj.offsetHeight;
   svg.replaceChildren();
-  tags.forEach((t, i) => {
-    const slot = SLOTS[i];
+  $$('.tag').forEach((t, i) => {
+    const slot = SLOTS[t.dataset.group];
     // translate: 0 -50% leaves offsetTop on the plaque's vertical centre.
     const cy = t.offsetTop;
     const sx = slot.side === 'left' ? t.offsetLeft : t.offsetLeft + t.offsetWidth;
     const elbow = slot.side === 'left' ? sx - 18 : sx + 18;
     const ex = ox + slot.ax * ow;
     const ey = oy + slot.ay * oh;
-    const g = sv('g', { style: { '--c': t.style.getPropertyValue('--c'), '--delay': `${(.5 + i * .14).toFixed(2)}s` } },
+    svg.append(sv('g', { style: { '--c': t.style.getPropertyValue('--c'), '--delay': `${(.5 + i * .12).toFixed(2)}s` } },
       sv('path', { d: `M${sx.toFixed(1)},${cy.toFixed(1)} L${elbow.toFixed(1)},${cy.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}` }),
-      sv('circle', { cx: ex.toFixed(1), cy: ey.toFixed(1), r: 3.5 }));
-    svg.append(g);
+      sv('circle', { cx: ex.toFixed(1), cy: ey.toFixed(1), r: 3.5 })));
     const glint = $('#glints').children[i];
     if (glint) { glint.style.left = `${ex}px`; glint.style.top = `${ey}px`; }
   });
 }
 
-function chooseTag(tag) {
-  const interestId = interestFor(tag);
-  D.interest = interestId || 'all';
-  D.focus = tag.family;
-  D.tagKey = tag.key;
-  const famLabel = FAMILIES[tag.family].label;
-  if (interestId) {
-    const label = interestLabel(interestId);
-    D.note = `‘${tag.text}’ 표찰에 맞춰 관심 이야기 ‘${label}’${ro(label)} 계산해 둔 추천입니다. 관심 없이 볼 때보다 순위가 어떻게 바뀌었는지도 표시합니다.`;
-  } else {
-    const what = tag.multi ? `${famLabel} 표찰` : `‘${tag.value}’`;
-    const josa = tag.multi ? '은' : hasBatchim(tag.value) ? '은' : '는';
-    D.note = `${what}${josa} 미리 계산한 관심 이야기가 아니어서, 관심 없이 본 추천에서 ${famLabel} 연결을 밝혀 보여 드립니다.`;
-  }
+function renderFilterChips() {
+  $('#filter-groups').replaceChildren(...D.groups.map(grp => el('div', { class: 'fgroup', style: { '--c': FAMILIES[grp.family].color } },
+    el('span', { class: 'fgroup-name' }, el('i', { 'aria-hidden': 'true', text: grp.glyph }), grp.label),
+    el('span', { class: 'fchips' }, grp.values.map(v => {
+      const b = el('button', { class: 'fchip', type: 'button', 'aria-pressed': 'false', 'data-group': grp.key, 'data-value': v, text: v });
+      b.addEventListener('click', () => toggleValue(grp.key, v));
+      return b;
+    })))));
+  syncFilterState();
+}
+function syncFilterState() {
+  $$('.fchip').forEach(b => b.setAttribute('aria-pressed', String(Boolean(D.filters.get(b.dataset.group)?.has(b.dataset.value)))));
+  $$('.tag').forEach(t => t.setAttribute('aria-pressed', String(Boolean(D.filters.get(t.dataset.group)?.size))));
+  $('#filter-clear').disabled = !anyFilter();
+}
+function toggleValue(gk, value) {
+  const set = D.filters.get(gk) || new Set();
+  if (set.has(value)) set.delete(value); else set.add(value);
+  if (set.size) D.filters.set(gk, set); else D.filters.delete(gk);
   activate();
 }
-
-function interestNote(id) {
-  if (id === 'all') return '관심 이야기 없이, 고른 유물과의 가까움만으로 찾은 여섯 점입니다.';
-  const it = interestById(id);
-  const label = interestLabel(id);
-  return `관심 이야기 ‘${label}’(${REL_LABEL[it.relation]} ${it.value})${hasBatchim(label) ? '을' : '를'} 더해 다시 찾은 여섯 점입니다.`;
+// A plaque stands for the whole attribute: all of this artifact's values in it, or none.
+function toggleGroup(gk) {
+  if (D.filters.get(gk)?.size) D.filters.delete(gk);
+  else D.filters.set(gk, new Set(D.groups.find(g => g.key === gk).values));
+  activate();
 }
 function selectInterest(id) {
   D.interest = id;
-  const it = interestById(id);
-  D.focus = it?.relation ? familyOf(it.relation) : null;
-  D.tagKey = D.tags.find(t => interestFor(t) === id)?.key || null;
-  D.note = interestNote(id);
   activate();
 }
 
@@ -1394,27 +1585,52 @@ function flyToChart() {
     .finished.then(() => { sky.hideCenter(false); ghost.remove(); }, () => { sky.hideCenter(false); ghost.remove(); });
 }
 
-function renderScenario() {
-  const demo = store.demo;
-  const sc = demo.scenarios[`${D.seed}|${D.interest}`];
-  if (!sc) return;
-  const base = demo.scenarios[`${D.seed}|all`];
-  const it = interestById(D.interest);
-  const seedAttrs = new Set(demo.catalog[D.seed].attributes.map(a => `${a.relation}|${a.value}`));
-  const interestKey = it?.relation ? `${it.relation}|${it.value}` : null;
-  const lens = D.interest === 'all' ? D.focus : null;
-  const { famList } = sky.update(sc, { seedAttrs, interestKey, lens });
-  let note = D.note;
-  if (lens && !famList.some(f => f.family === lens)) note = `관심 없이 본 추천 여섯 점에는 ${FAMILIES[lens].label} 연결이 나타나지 않았습니다.`;
-  $('#lens-note').textContent = note;
-  renderReading(famList, interestKey);
-  renderFinds(sc, base);
-  $$('.lens-chip').forEach(b => { const on = b.dataset.id === D.interest; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
-  renderTagState();
+function interestNote(id) {
+  const it = interestById(id);
+  const label = interestLabel(id);
+  return `관심 이야기 ‘${label}’(${REL_LABEL[it.relation]} ${it.value})${hasBatchim(label) ? '을' : '를'} 더해 다시 순위를 매겼습니다.`;
+}
+function selectionText() {
+  return FILTER_GROUPS.filter(g => D.filters.get(g.key)?.size).map(g => {
+    const v = [...D.filters.get(g.key)];
+    return `${g.label} ${v.length > 3 ? `${v.slice(0, 2).join('·')} 등 ${v.length}가지 중 하나` : v.join(' 또는 ')}`;
+  }).join(' · ');
+}
+function composeNote(model) {
+  const parts = [];
+  const sel = selectionText();
+  if (D.interest !== 'all') parts.push(interestNote(D.interest));
+  else if (!sel) parts.push('관심 이야기 없이, 고른 유물과의 가까움만으로 찾은 여섯 점입니다.');
+  if (sel) {
+    const josa = hasBatchim(sel) ? '을' : '를';
+    const all = FILTER_GROUPS.filter(g => D.filters.get(g.key)?.size).length > 1 ? '모두 ' : '';
+    if (!model.recs.length) parts.push(`모델 후보 ${model.poolSize}점 가운데 ${sel}${josa} ${all}갖춘 유물이 없습니다. 칩을 하나 빼 보세요.`);
+    else {
+      const tail = model.recs.length < 6 ? ` 조건에 맞는 후보가 ${model.recs.length}점뿐입니다.` : ` 조건에 맞는 후보는 ${model.matched}점입니다.`;
+      parts.push(`${sel}${josa} ${all}갖춘 유물을 모델 후보 ${model.poolSize}점 가운데 순위대로 ${model.recs.length}점 골랐습니다.${tail}`);
+    }
+  }
+  if (RECOMMEND_TEMPERATURE > 0) parts.push(`temperature ${RECOMMEND_TEMPERATURE}로 후보 안에서 확률에 따라 뽑았습니다.`);
+  return parts.join(' ');
 }
 
-function renderTagState() {
-  $$('.tag').forEach(t => t.setAttribute('aria-pressed', String(D.active && t.dataset.key === D.tagKey)));
+function renderScenario() {
+  const model = recommend();
+  D.model = model;
+  const seed = store.demo.catalog[D.seed];
+  const seedAttrs = new Set(seed.attributes.map(a => `${a.relation}|${a.value}`));
+  const { famList } = sky.update(model.recs, { seedAttrs, boosted: model.boostedKeys });
+  $('#lens-note').textContent = composeNote(model);
+  $('#chart-empty').hidden = model.recs.length > 0;
+  renderReading(famList, model.boostedKeys);
+  renderFinds(model.recs, baseHeads());
+  $$('.lens-chip').forEach(b => { const on = b.dataset.id === D.interest; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
+  syncFilterState();
+  $('#curate-toggle').hidden = !model.recs.length;
+  if (D.curator) {
+    if (!model.recs.length) toggleCurator(false);
+    else { sky.setCurator(true); showCurated(Math.min(D.cIndex, model.recs.length - 1)); }
+  }
 }
 
 function buildLens() {
@@ -1437,7 +1653,7 @@ function buildLens() {
   });
 }
 
-function renderReading(famList, interestKey) {
+function renderReading(famList, boostedKeys) {
   const list = $('#families');
   list.replaceChildren(...famList.map(f => {
     const meta = FAMILIES[f.family];
@@ -1453,7 +1669,7 @@ function renderReading(famList, interestKey) {
     const rest = f.values.length - shown.length;
     const vals = el('ul', { class: 'values' },
       shown.map(v => {
-        const chip = el('span', { class: `value-chip${v.key === interestKey ? ' interest' : ''}`, 'data-key': v.key, tabindex: 0, title: `${REL_LABEL[v.relation] || v.relation} ${v.value}` },
+        const chip = el('span', { class: `value-chip${boostedKeys.has(v.key) ? ' interest' : ''}`, 'data-key': v.key, tabindex: 0, title: `${REL_LABEL[v.relation] || v.relation} ${v.value}` },
           el('i', { class: `dot${v.shared ? '' : ' hollow'}`, 'aria-hidden': 'true' }), el('span', { text: v.value }), el('small', { text: pct(v.weight) }));
         chip.addEventListener('pointerenter', () => sky.highlight({ value: v.key }));
         chip.addEventListener('pointerleave', off);
@@ -1467,37 +1683,124 @@ function renderReading(famList, interestKey) {
   raf2(() => $$('.track i', list).forEach((i, k) => i.style.setProperty('--w', famList[k].total.toFixed(4))));
 }
 
-function renderFinds(sc, base) {
-  const baseIds = base.recommendations.map(r => r.id);
-  $('#finds').replaceChildren(...sc.recommendations.map((r, i) => {
-    const item = { ...store.demo.catalog[r.id], ...r };
-    const photo = photoFor(item);
-    const plate = photo
-      ? el('span', { class: 'find-plate' }, el('img', { src: photo.thumb || photo.image, alt: '', loading: 'lazy', decoding: 'async' }))
-      : el('span', { class: 'find-plate blank' }, el('span', { class: 'find-glyph', 'aria-hidden': 'true', text: glyphFor(item) }), el('small', { text: '사진 미수록' }));
-    const why = [...r.explanationEdges].sort((a, b) => b.weight - a.weight).slice(0, 3)
+// A photo plate: the warm pool of light the photo multiplies into (studio backdrops melt away,
+// the artifact itself is never cropped), or the material glyph when there is no photo yet.
+function plate(item, cls, full = false) {
+  const photo = photoFor(item);
+  if (!photo) return el('span', { class: `${cls} blank` }, el('span', { class: 'plate-glyph', 'aria-hidden': 'true', text: glyphFor(item) }), el('small', { text: '사진 미수록' }));
+  return el('span', { class: cls }, el('img', { src: full ? photo.image : photo.thumb || photo.image, alt: '', loading: 'lazy', decoding: 'async' }));
+}
+
+function renderFinds(recs, baseList) {
+  const host = $('#finds');
+  if (!recs.length) {
+    host.replaceChildren(el('li', { class: 'finds-empty', text: '고른 속성을 모두 갖춘 유물이 후보 안에 없습니다.' }));
+    return;
+  }
+  host.replaceChildren(...recs.map((r, i) => {
+    const why = r.explanationEdges.slice(0, 3)
       .map(e => el('span', { style: { '--c': FAMILIES[familyOf(e.relation)].color }, title: `${REL_LABEL[e.relation] || e.relation} ${e.value}`, text: e.value }));
     const flags = [];
     if (D.interest !== 'all') {
       if (r.interestMatched) flags.push(el('span', { class: 'flag interest', text: '관심 일치' }));
-      const j = baseIds.indexOf(r.id);
+      const j = baseList.indexOf(r.headKey);
       if (j < 0) flags.push(el('span', { class: 'flag new', text: '새로 등장' }));
       else flags.push(el('span', { class: 'flag', text: j > i ? `${j - i}계단 위로` : j < i ? `${i - j}계단 아래로` : '순위 그대로' }));
     }
-    const btn = el('button', { class: 'find', type: 'button', 'data-id': r.id, 'aria-label': `추천 ${i + 1}위 ${item.name}. 자세히 보기` },
-      plate,
+    const btn = el('button', { class: 'find', type: 'button', 'data-key': r.headKey, 'aria-label': `추천 ${i + 1}위 ${r.name}. 자세히 보기` },
+      plate(r, 'find-plate'),
       el('span', { class: 'find-copy' },
-        el('span', { class: 'find-head' }, el('span', { class: 'find-rank', 'aria-hidden': 'true', text: HANJA_NUM[i] }), el('span', { class: 'find-name', text: item.name })),
-        el('span', { class: 'find-meta', text: metaLine(item) }),
+        el('span', { class: 'find-head' }, el('span', { class: 'find-rank', 'aria-hidden': 'true', text: HANJA_NUM[i] }), el('span', { class: 'find-name', text: r.name })),
+        el('span', { class: 'find-meta', text: metaLine(r) }),
         el('span', { class: 'find-why' }, why),
         flags.length ? el('span', { class: 'find-flags' }, flags) : null));
-    btn.addEventListener('pointerenter', () => sky.highlight({ rec: r.id }));
+    btn.addEventListener('pointerenter', () => sky.highlight({ rec: r.headKey }));
     btn.addEventListener('pointerleave', () => sky.highlight({}));
-    btn.addEventListener('focus', () => sky.highlight({ rec: r.id }));
+    btn.addEventListener('focus', () => sky.highlight({ rec: r.headKey }));
     btn.addEventListener('blur', () => sky.highlight({}));
-    btn.addEventListener('click', () => openArtifact(item, { rank: i + 1, rec: r }));
+    btn.addEventListener('click', () => openArtifact(r, { rank: i + 1, rec: r }));
     return el('li', { style: { '--i': i } }, btn);
   }));
+}
+
+/* Curator mode: the ring straightens into a walking line and one artifact at a time
+   stands under the spotlight with the reasons it was chosen. */
+const CURATOR_AUTOPLAY_MS = 6500;
+function initCurator() {
+  $('#curate-toggle').addEventListener('click', () => toggleCurator());
+  $('#cur-prev').addEventListener('click', () => { showCurated(D.cIndex - 1); restartAuto(); });
+  $('#cur-next').addEventListener('click', () => { showCurated(D.cIndex + 1); restartAuto(); });
+  $('#cur-auto').addEventListener('click', () => setAuto(!D.auto));
+  document.addEventListener('keydown', e => {
+    if (!D.curator || document.querySelector('dialog[open]')) return;
+    if (e.target.closest('input, textarea, [role="radiogroup"]')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); showCurated(D.cIndex + 1); restartAuto(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); showCurated(D.cIndex - 1); restartAuto(); }
+    else if (e.key === 'Escape') toggleCurator(false);
+  });
+}
+function toggleCurator(on = !D.curator) {
+  if (on && !D.model?.recs.length) return;
+  D.curator = on;
+  const btn = $('#curate-toggle');
+  btn.setAttribute('aria-pressed', String(on));
+  btn.textContent = on ? '원형으로 보기' : '순서대로 보기';
+  $('#theater').classList.toggle('curating', on);
+  $('#curator').hidden = !on;
+  sky.setCurator(on);
+  if (on) showCurated(0);
+  else { setAuto(false); sky.setCurrent(null); }
+}
+function setAuto(on) {
+  clearInterval(D.auto);
+  D.auto = on && D.curator ? setInterval(() => showCurated(D.cIndex + 1), CURATOR_AUTOPLAY_MS) : null;
+  $('#cur-auto').setAttribute('aria-pressed', String(Boolean(D.auto)));
+  $('#cur-auto').textContent = D.auto ? '자동 넘김 멈춤' : '자동 넘김';
+}
+function restartAuto() { if (D.auto) setAuto(true); }
+function curatorNote(r) {
+  const seed = store.demo.catalog[D.seed];
+  const seedName = SHORT[D.seed] || seed.name;
+  const [e1, e2] = r.explanationEdges;
+  if (!e1) return '이 유물에는 해설에 쓸 연결이 없습니다.';
+  const lab = e => `${REL_PROSE[e.relation] || e.relation} ‘${e.value}’`;
+  let s = `이 유물을 고른 가장 큰 이유는 ${lab(e1)}입니다.`;
+  if (e2) s += ` 그다음은 ${lab(e2)}입니다.`;
+  const shared = r.sharedAttributes.map(a => a.value);
+  const wa = hasBatchim(seedName) ? '과' : '와';
+  if (shared.length) {
+    const list = shared.slice(0, 3).join(', ') + (shared.length > 3 ? ' 등' : '');
+    s += ` ${seedName}${wa} ${list}${hasBatchim(list) ? '을' : '를'} 함께 지녔습니다.`;
+  } else s += ` ${seedName}${wa} 겹치는 속성은 없지만, 모델이 배운 연결에서 가깝게 놓였습니다.`;
+  if (D.interest !== 'all' && r.interestMatched) s += ` 고른 관심 이야기 ‘${interestLabel(D.interest)}’에도 맞습니다.`;
+  return s;
+}
+function showCurated(i) {
+  const recs = D.model?.recs || [];
+  if (!recs.length) return;
+  const n = recs.length;
+  D.cIndex = ((i % n) + n) % n;
+  const r = recs[D.cIndex];
+  sky.setCurrent(r.headKey);
+  const stage = $('#curator-stage');
+  stage.replaceChildren(el('span', { class: 'cur-spot', 'aria-hidden': 'true' }), plate(r, 'cur-plate', true), el('span', { class: 'cur-shadow', 'aria-hidden': 'true' }));
+  if (!reduced) stage.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 520, easing: 'cubic-bezier(.2,.7,.1,1)' });
+  $('#curator-step').textContent = `${HANJA_NUM[D.cIndex] || D.cIndex + 1} · ${D.cIndex + 1}번째로 만날 유물`;
+  $('#curator-name').textContent = r.name;
+  $('#curator-meta').textContent = [metaLine(r), `${r.institution || '국립중앙박물관'} ${r.id}`].filter(Boolean).join(' · ');
+  const desc = (r.description || '').replace(/\s+/g, ' ').trim();
+  $('#curator-note').replaceChildren(curatorNote(r), desc ? el('span', { class: 'cur-desc', text: short(desc, 120) }) : null);
+  const top = r.explanationEdges.slice(0, 4);
+  const max = top[0]?.weight || 1;
+  $('#curator-why').replaceChildren(el('li', { class: 'why-caption', text: '해설 비중 (여섯 점 전체를 1로 볼 때)' }), ...top.map(e => el('li', { style: { '--c': FAMILIES[familyOf(e.relation)].color } },
+    el('span', { class: 'why-label' }, el('small', { text: REL_PROSE[e.relation] || e.relation }), e.value),
+    el('span', { class: 'track' }, el('i', { style: { '--w': (e.weight / max).toFixed(3) } })),
+    el('b', { text: pct(e.weight) }))));
+  $('#cur-progress').replaceChildren(...recs.map((x, k) => {
+    const b = el('button', { type: 'button', class: k === D.cIndex ? 'on' : '', 'aria-label': `${k + 1}번째 유물 보기`, 'aria-current': k === D.cIndex ? 'step' : null });
+    b.addEventListener('click', () => { showCurated(k); restartAuto(); });
+    return b;
+  }), el('span', { class: 'cur-count', text: `${D.cIndex + 1} / ${n}` }));
 }
 
 /* Detail sheet with zoom --------------------------------------------------- */
@@ -1549,7 +1852,7 @@ function showSheet(dialog) {
   if (!dialog.open) dialog.showModal();
 }
 function openArtifact(item, extra = {}) {
-  const cat = store.demo?.catalog?.[item.id];
+  const cat = store.items.get(keyOf(item)) || store.demo?.catalog?.[item.id];
   const name = item.name || cat?.name || item.id;
   const photo = photoFor(item);
   const media = photo
@@ -1629,6 +1932,9 @@ function initSheets() {
   const poster = () => showSheet($('#poster-dialog'));
   $('#poster-open').addEventListener('click', poster);
   $('#poster-frame').addEventListener('click', poster);
+  const paper = () => showSheet($('#paper-dialog'));
+  $('#paper-open').addEventListener('click', paper);
+  $('#paper-frame').addEventListener('click', paper);
 }
 
 /* Collection: filters, search, batches -------------------------------------- */
@@ -1780,7 +2086,7 @@ function initIntro() {
     // Replay the hero entrance now that it is actually visible.
     $$('.hero h1 .line, .hero-lede, .cta-begin, .hero-object').forEach(n => { n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
     wrap.classList.add('leaving');
-    setTimeout(() => wrap.remove(), 900);
+    setTimeout(() => wrap.remove(), 450);
   }
   addEventListener('keydown', onKey);
   skip.addEventListener('click', finish);

@@ -26,8 +26,16 @@ python3 scripts/preview.py --port 4173
 ### 첫 화면 효과와 인트로
 
 - 떠다니는 불빛과 마우스 붓자국은 `app.js` 맨 위쪽 `HERO_FX_INTENSITY` 상수 하나로 세기를 조절합니다(0 = 끔, 1 = 설계 세기, 현재 0.85). 터치 화면에서는 불빛만, 움직임 줄이기 설정에서는 둘 다 꺼집니다.
-- 첫 방문 인트로는 자리만 있습니다. `index.html`의 `<html data-intro="">`에 영상 경로(예: `assets/media/intro.mp4`)를 넣으면, 첫 방문 때 한 번 재생하고 끝나는 순간 첫 화면 반복 영상을 처음 프레임부터 이어 재생합니다. 건너뛰기 버튼과 Esc가 있고, `?intro=1`을 붙이면 다시 볼 수 있습니다. 휴대폰용은 `data-intro-mobile`, 포스터는 `data-intro-poster`.
-- 컷 없이 이어지려면 인트로의 마지막 프레임이 반복 영상의 첫 프레임과 같아야 합니다. 그 프레임은 `media-src/hero-loop-first-frame.png`(공개 사이트에는 올리지 않음)입니다.
+- 첫 방문 인트로(문 열리는 5초 영상, `assets/media/intro.mp4`·`intro-mobile.mp4`, 포스터 `intro-poster.webp`)는 `index.html`의 `<html data-intro…>` 속성으로 지정합니다. 첫 방문 때 한 번 재생하고 끝나면 0.3초 겹침으로 첫 화면 반복 영상(처음 프레임부터)에 넘깁니다. 건너뛰기 버튼과 Esc가 있고, `?intro=1`을 붙이면 다시 볼 수 있습니다. 움직임 줄이기 설정에서는 생략합니다.
+- 인트로 마지막 프레임과 반복 영상 첫 프레임의 차이는 평균 4.4(0–255 기준)입니다. 완전히 맞추려면 `media-src/hero-loop-first-frame.png`(공개 사이트에는 올리지 않음)를 끝 프레임으로 다시 생성하면 됩니다.
+
+### 추천 체험의 계산
+
+- 추천은 미리 계산한 실제 모델 결과입니다. `scripts/export_recommendations.py`가 원본 모델(`online-learning/2026-09-05`, 읽기 전용)의 `recommend_top_n`·`compute_importance`로 `assets/recommendations.json`(기준 5점 × 관심 5종의 상위 6점)과 `assets/recommendation-pool.json`(조합마다 후보 120점의 순위와 각 연결의 CAFE 원점수 s_k)을 만듭니다.
+- 순위는 RotatE 임베딩 유사도(관심 이야기가 있으면 0.6 × 유물 유사도 + 0.4 × 관심 조건 유사도)이고, CAFE는 그 순위의 이유를 설명하는 가중치입니다. temperature 0(= 원본 `use_sampling=False`)으로 내보내 같은 선택에는 늘 같은 결과가 나옵니다. 2026-11-15 재생성 결과는 이전 파일과 25개 조합 모두 같았습니다.
+- 브라우저는 속성 칩(같은 속성 안은 OR, 다른 속성끼리는 AND)으로 후보를 걸러 순위대로 6점을 고르고, `src/importance.py`와 같은 식으로 CAFE를 다시 계산합니다(파이썬 원본과 차이 1e-7 이하). 고른 칩과 관심 이야기의 연결은 해설에서 5배 무게를 받습니다.
+- 조절용 상수(`app.js`): `RECOMMEND_TEMPERATURE`(0 = 고정 순위, 0보다 크면 후보 안에서 softmax(점수/T) 비복원 추출), `BOOST_SELECTED_ATTRIBUTES`, `SWAY_INTENSITY`(가중치 선 살랑임, 0 = 멈춤), `VITRINE_LIGHT`(진열장 사진의 빛 위치, 측정값 x 63.7%·y 70.7%), `CURATOR_AUTOPLAY_MS`.
+- 다시 내보내기: `/path/online-learning/2026-09-05/.venv-report/bin/python scripts/export_recommendations.py --project /path/online-learning/2026-09-05 --output /tmp/rec-export --temperature 0` 후 두 JSON을 `assets/`로 복사합니다.
 
 ### 생성 미디어 넣기
 

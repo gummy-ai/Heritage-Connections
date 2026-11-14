@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- Intro slot: set data-intro to a video path (e.g. assets/media/intro.mp4) to play it once on a first visit. Empty = no intro. -->
-<html lang="ko" data-intro="" data-intro-mobile="" data-intro-poster="">
+<html lang="ko" data-intro="./assets/media/intro.mp4" data-intro-mobile="./assets/media/intro-mobile.mp4" data-intro-poster="./assets/media/intro-poster.webp">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -28,8 +28,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400;1,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap" rel="stylesheet">
   <link rel="preload" as="image" href="./assets/cutouts/moon-jar.webp">
-  <link rel="stylesheet" href="./styles.css?v=20261115-fx">
-  <script type="module" src="./app.js?v=20261115-fx"></script>
+  <link rel="stylesheet" href="./styles.css?v=20261115-cur">
+  <script type="module" src="./app.js?v=20261115-cur"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">본문으로 바로가기</a>
@@ -116,12 +116,15 @@
 
       <div class="theater" id="theater" data-active="false">
         <div class="vitrine" id="vitrine">
-          <div class="media-slot" id="vitrine-slot" aria-hidden="true"></div>
-          <div class="cone" aria-hidden="true"></div>
-          <canvas class="dust vitrine-dust" id="vitrine-dust" aria-hidden="true"></canvas>
-          <div class="floor" aria-hidden="true"></div>
-          <img class="vitrine-reflect" id="vitrine-reflect" alt="" aria-hidden="true">
-          <img class="vitrine-obj" id="vitrine-obj" alt="">
+          <!-- The case keeps the backdrop's aspect ratio so its spotlight never drifts: the artifact stands on the lit spot. -->
+          <div class="case" id="case">
+            <div class="media-slot" id="vitrine-slot" aria-hidden="true"></div>
+            <div class="cone" aria-hidden="true"></div>
+            <canvas class="dust vitrine-dust" id="vitrine-dust" aria-hidden="true"></canvas>
+            <div class="floor" aria-hidden="true"></div>
+            <img class="vitrine-reflect" id="vitrine-reflect" alt="" aria-hidden="true">
+            <img class="vitrine-obj" id="vitrine-obj" alt="">
+          </div>
           <svg class="leaders" id="leaders" aria-hidden="true"></svg>
           <div class="glints" id="glints" aria-hidden="true"></div>
           <div class="tags" id="tags" role="group" aria-label="이 유물의 속성 표찰"></div>
@@ -130,17 +133,44 @@
         </div>
 
         <div class="sky-chart">
-          <svg class="constellation" id="constellation" viewBox="-500 -500 1000 1000" role="group" aria-labelledby="constellation-title constellation-desc">
-            <title id="constellation-title">연결의 별자리</title>
-            <desc id="constellation-desc">가운데는 고른 유물, 안쪽 고리는 관계와 속성, 바깥 고리는 추천된 여섯 점입니다. 선의 굵기는 CAFE 해설 가중치입니다.</desc>
-          </svg>
-          <p class="chart-dormant" id="chart-dormant">표찰을 누르면 연결의 별자리가 켜집니다</p>
+          <button class="curate-toggle" id="curate-toggle" type="button" aria-pressed="false" hidden>순서대로 보기</button>
+          <div class="chart-box" id="chart-box">
+            <svg class="constellation" id="constellation" viewBox="-500 -500 1000 1000" role="group" aria-labelledby="constellation-title constellation-desc">
+              <title id="constellation-title">연결의 별자리</title>
+              <desc id="constellation-desc">가운데는 고른 유물, 안쪽 고리는 관계와 속성, 바깥 고리는 추천된 유물입니다. 선의 굵기는 CAFE 해설 가중치입니다.</desc>
+            </svg>
+            <section class="curator" id="curator" aria-label="순서대로 보기" hidden>
+              <div class="curator-stage" id="curator-stage"></div>
+              <div class="curator-copy">
+                <p class="curator-step" id="curator-step"></p>
+                <h4 class="curator-name" id="curator-name"></h4>
+                <p class="curator-meta" id="curator-meta"></p>
+                <p class="curator-note" id="curator-note"></p>
+                <ul class="curator-why" id="curator-why"></ul>
+                <div class="curator-controls">
+                  <button class="cur-btn" id="cur-prev" type="button" aria-label="이전 유물">‹ 이전</button>
+                  <span class="cur-progress" id="cur-progress" aria-live="polite"></span>
+                  <button class="cur-btn" id="cur-next" type="button" aria-label="다음 유물">다음 ›</button>
+                  <button class="cur-btn cur-auto" id="cur-auto" type="button" aria-pressed="false">자동 넘김</button>
+                </div>
+              </div>
+            </section>
+          </div>
+          <p class="chart-dormant" id="chart-dormant">표찰이나 아래 칩을 누르면 연결의 별자리가 켜집니다</p>
+          <p class="chart-empty" id="chart-empty" hidden>고른 속성을 모두 갖춘 유물이 후보 안에 없습니다. 칩을 하나 빼 보세요.</p>
         </div>
       </div>
 
-      <div class="lens" id="lens">
-        <span class="lens-label" id="lens-label">관심 이야기</span>
-        <div class="lens-chips" id="lens-chips" role="radiogroup" aria-labelledby="lens-label"></div>
+      <div class="controls" id="controls">
+        <div class="control-row">
+          <span class="control-label" id="filter-label">속성 거르기</span>
+          <div class="filter-groups" id="filter-groups" role="group" aria-labelledby="filter-label"></div>
+          <button class="filter-clear" id="filter-clear" type="button" disabled>모두 해제</button>
+        </div>
+        <div class="control-row">
+          <span class="control-label" id="lens-label">관심 이야기</span>
+          <div class="lens-chips" id="lens-chips" role="radiogroup" aria-labelledby="lens-label"></div>
+        </div>
         <p class="lens-note" id="lens-note" aria-live="polite"></p>
       </div>
 
@@ -163,7 +193,8 @@
 
       <details class="method-note">
         <summary>이 체험은 어떻게 계산되었나요</summary>
-        <p>실제 학습 모델로 기준 유물 5점 × 관심 이야기 5종, 25가지 조합의 추천을 미리 계산해 둔 결과입니다. 웹 모드 V1, 관람 시간 10분, 샘플링 끔, 추천 6점 조건이며 실시간 추론은 아닙니다. 관심 이야기로 고른 속성의 연결은 해설에서 5배의 무게를 받은 뒤 다시 정규화됩니다. 미리 계산하지 않은 속성 표찰을 누르면, 관심 없이 본 추천에서 그 관계의 연결만 밝혀 보여 드립니다.</p>
+        <p>실제 학습 모델(RotatE 임베딩)이 기준 유물 5점 × 관심 이야기 5종마다 후보 유물 120점의 순위를 미리 매겨 두었습니다. 웹 모드 V1, 샘플링 끔(temperature 0)이라 같은 선택에는 늘 같은 결과가 나오며, 실시간 추론은 아닙니다.</p>
+        <p>속성 칩을 고르면 이 후보 가운데 같은 속성 안에서는 하나라도, 다른 속성끼리는 모두 갖춘 유물만 남기고 순위대로 여섯 점을 보여 줍니다. 해설 가중치(CAFE)는 화면의 여섯 점을 두고 원본 모델과 같은 식으로 다시 계산합니다. 관심 이야기와 고른 속성의 연결은 해설에서 5배의 무게를 받은 뒤 다시 정규화됩니다.</p>
       </details>
     </section>
 
@@ -192,7 +223,7 @@
     <section class="research" id="research" aria-labelledby="research-title">
       <div class="research-grid">
         <div class="research-copy">
-          <p class="kicker">ICTC 2026 · 연구 포스터</p>
+          <p class="kicker">ICTC 2026 · 논문과 포스터</p>
           <h2 id="research-title">발견에 이유를 붙이는 연구</h2>
           <p class="research-lede">문화유산 12,986점과 17종의 관계를 지식그래프로 엮었습니다. RotatE 임베딩으로 유물 사이의 가까움을 배우고, CAFE의 계층적 가중치로 어떤 연결이 추천의 이유인지 설명합니다.</p>
           <ol class="ladder">
@@ -208,16 +239,26 @@
           <p class="figures-note">2026년 11월 12일 모델 스냅샷 기준</p>
           <p class="paper"><cite>A Coarse-to-Fine Hierarchical Approach for Cultural Heritage Recommendation</cite><span>Jinyoung Jung* · Junsu Kim* · Jiwon Lee · Hwijae Son†</span><small>* 공동 제1저자 · † 교신저자 · ICTC 2026 논문 2쪽</small></p>
           <div class="paper-links">
-            <a class="paper-open" href="./assets/ictc-2026-paper.pdf?v=20261115" target="_blank" rel="noopener">논문 읽기</a>
+            <button class="paper-open" id="paper-open" type="button">논문 읽기</button>
             <button class="poster-open" id="poster-open" type="button">포스터 보기</button>
             <a class="poster-pdf" href="./assets/ictc-2026-poster.pdf?v=2965aea" download>포스터 PDF</a>
           </div>
         </div>
-        <figure class="poster">
-          <button class="poster-frame" type="button" id="poster-frame" aria-label="ICTC 2026 연구 포스터 크게 보기">
-            <img src="./assets/ictc-2026-poster.webp?v=2965aea" alt="ICTC 2026 문화유산 추천 연구 포스터" loading="lazy" width="900" height="1200">
-          </button>
-        </figure>
+        <div class="documents">
+          <figure class="doc">
+            <button class="doc-frame" type="button" id="poster-frame" aria-label="ICTC 2026 연구 포스터 크게 보기">
+              <img src="./assets/ictc-2026-poster.webp?v=2965aea" alt="ICTC 2026 문화유산 추천 연구 포스터" loading="lazy" width="900" height="1200">
+            </button>
+            <figcaption><b>연구 포스터</b><span>ICTC 2026</span></figcaption>
+          </figure>
+          <figure class="doc doc-paper">
+            <button class="doc-frame paper-stack" type="button" id="paper-frame" aria-label="ICTC 2026 논문 크게 보기">
+              <img class="page-back" src="./assets/ictc-2026-paper-p2.webp?v=20261115" alt="" loading="lazy" width="935" height="1210">
+              <img class="page-front" src="./assets/ictc-2026-paper-p1.webp?v=20261115" alt="ICTC 2026 논문 첫 쪽: A Coarse-to-Fine Hierarchical Approach for Cultural Heritage Recommendation" loading="lazy" width="935" height="1210">
+            </button>
+            <figcaption><b>논문</b><span>ICTC 2026 · 2쪽</span></figcaption>
+          </figure>
+        </div>
       </div>
     </section>
   </main>
@@ -241,6 +282,13 @@
   <dialog class="sheet text-sheet" id="credits-dialog" aria-labelledby="credits-title">
     <div class="sheet-bar"><h2 id="credits-title">사진 출처와 이용조건</h2><button type="button" class="sheet-close" data-close aria-label="닫기">닫기</button></div>
     <div class="sheet-body" id="credits-body"></div>
+  </dialog>
+  <dialog class="sheet poster-sheet paper-sheet" id="paper-dialog" aria-label="ICTC 2026 논문">
+    <div class="sheet-bar"><span>ICTC 2026 논문 · 2쪽</span><span class="sheet-actions"><a class="sheet-link" href="./assets/ictc-2026-paper.pdf?v=20261115" target="_blank" rel="noopener">PDF로 열기</a><button type="button" class="sheet-close" data-close aria-label="닫기">닫기</button></span></div>
+    <div class="sheet-body">
+      <img src="./assets/ictc-2026-paper-p1.webp?v=20261115" alt="논문 1쪽" loading="lazy" width="935" height="1210">
+      <img src="./assets/ictc-2026-paper-p2.webp?v=20261115" alt="논문 2쪽" loading="lazy" width="935" height="1210">
+    </div>
   </dialog>
   <dialog class="sheet poster-sheet" id="poster-dialog" aria-label="ICTC 2026 연구 포스터">
     <div class="sheet-bar"><span>ICTC 2026 연구 포스터</span><button type="button" class="sheet-close" data-close aria-label="닫기">닫기</button></div>
