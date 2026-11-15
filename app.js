@@ -1879,10 +1879,11 @@ function initSheets() {
       if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
     });
   });
-  $('#credits-open').addEventListener('click', openCredits);
+  // Optional chaining: a page and script from different deploys must not stop the boot here.
+  $('#credits-open')?.addEventListener('click', openCredits);
   const poster = () => showSheet($('#poster-dialog'));
-  $('#poster-open').addEventListener('click', poster);
-  $('#poster-frame').addEventListener('click', poster);
+  $('#poster-open')?.addEventListener('click', poster);
+  $('#poster-frame')?.addEventListener('click', poster);
 }
 
 /* Collection: filters, search, batches -------------------------------------- */
