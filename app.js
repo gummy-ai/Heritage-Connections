@@ -834,11 +834,13 @@ const C = { center: 82, tickIn: 96, tickOut: 106, ringA: 92, ringB: 112, famLabe
 // 0 keeps the lines still; prefers-reduced-motion always does.
 const SWAY_INTENSITY = 1;
 
+// uid keeps the SVG ids of separate instances apart.
 class Constellation {
-  constructor(svg, { onOpen, onHighlight }) {
+  constructor(svg, { onOpen, onHighlight, uid = 'c' }) {
     this.svg = svg;
     this.onOpen = onOpen;
     this.onHighlight = onHighlight;
+    this.uid = uid;
     this.stars = new Map();
     this.recs = new Map();
     this.order = [];
@@ -848,12 +850,12 @@ class Constellation {
     this.visible = false;
     this.running = false;
     const defs = sv('defs', {},
-      sv('radialGradient', { id: 'c-center-fill' }, sv('stop', { offset: '0', 'stop-color': '#252c33' }), sv('stop', { offset: '1', 'stop-color': '#0e1012' })),
-      sv('radialGradient', { id: 'c-glow' }, sv('stop', { offset: '0', 'stop-color': 'rgba(255, 236, 196, .22)' }), sv('stop', { offset: '1', 'stop-color': 'rgba(255, 236, 196, 0)' })),
+      sv('radialGradient', { id: `${uid}-center-fill` }, sv('stop', { offset: '0', 'stop-color': '#252c33' }), sv('stop', { offset: '1', 'stop-color': '#0e1012' })),
+      sv('radialGradient', { id: `${uid}-glow` }, sv('stop', { offset: '0', 'stop-color': 'rgba(255, 236, 196, .22)' }), sv('stop', { offset: '1', 'stop-color': 'rgba(255, 236, 196, 0)' })),
       // Warm pool of light behind each photo; the photo multiplies into it so studio backdrops melt away.
-      sv('radialGradient', { id: 'c-plate', cx: '.5', cy: '.46', r: '.62' },
+      sv('radialGradient', { id: `${uid}-plate`, cx: '.5', cy: '.46', r: '.62' },
         sv('stop', { offset: '0', 'stop-color': '#ddd4c3' }), sv('stop', { offset: '.58', 'stop-color': '#8d877c' }), sv('stop', { offset: '1', 'stop-color': '#202124' })),
-      sv('clipPath', { id: 'c-clip' }, sv('circle', { r: C.recR })));
+      sv('clipPath', { id: `${uid}-clip` }, sv('circle', { r: C.recR })));
     this.L = {};
     for (const name of ['static', 'arcs', 'spokes', 'links', 'hits', 'stars', 'labels', 'recs', 'center']) this.L[name] = sv('g', { class: `c-layer-${name}` });
     svg.append(defs, ...Object.values(this.L));
@@ -887,7 +889,7 @@ class Constellation {
     const g = this.L.center;
     g.setAttribute('class', 'c-center');
     this.centerImg = sv('image', { x: -60, y: -64, width: 120, height: 120, preserveAspectRatio: 'xMidYMid meet' });
-    g.append(sv('circle', { r: C.center + 30, fill: 'url(#c-glow)' }), sv('circle', { class: 'disk', r: C.center }), this.centerImg);
+    g.append(sv('circle', { r: C.center + 30, fill: `url(#${this.uid}-glow)` }), sv('circle', { class: 'disk', r: C.center, style: { fill: `url(#${this.uid}-center-fill)` } }), this.centerImg);
   }
   setCenter(src) { this.centerImg.setAttribute('href', src); }
   centerRect() { return $('.disk', this.L.center).getBoundingClientRect(); }
@@ -1091,8 +1093,8 @@ class Constellation {
     const bx = -C.recR * .76;
     const R = C.recR;
     const node = sv('g', { class: 'c-rec', tabindex: 0, role: 'button', 'data-key': r.headKey },
-      sv('circle', { class: `disk${photo ? ' lit' : ''}`, r: R }),
-      photo ? sv('image', { class: 'plate-img', href: photo.thumb || photo.image, x: -R * .92, y: -R * .92, width: R * 1.84, height: R * 1.84, preserveAspectRatio: 'xMidYMid meet', 'clip-path': 'url(#c-clip)' })
+      sv('circle', { class: `disk${photo ? ' lit' : ''}`, r: R, style: photo ? { fill: `url(#${this.uid}-plate)` } : null }),
+      photo ? sv('image', { class: 'plate-img', href: photo.thumb || photo.image, x: -R * .92, y: -R * .92, width: R * 1.84, height: R * 1.84, preserveAspectRatio: 'xMidYMid meet', 'clip-path': `url(#${this.uid}-clip)` })
         : sv('text', { class: 'glyph', text: glyphFor(r) }),
       sv('circle', { class: 'ring', r: R + 4 }),
       sv('circle', { class: 'badge', cx: bx, cy: bx, r: 12 }),
@@ -1263,14 +1265,10 @@ function cafeWeights(heads, isBoosted) {
   for (const e of rows) e.weight /= total + 1e-9;
   return rows;
 }
-const seedPool = () => store.pool?.seeds?.[D.seed] || null;
-function selectedIdx() {
-  const sp = seedPool();
-  return sp ? sp.chips.map(([r, v], i) => (D.chips.has(`${r}|${v}`) ? i : -1)).filter(i => i >= 0) : [];
-}
+const seedPool = (id = D.seed) => store.pool?.seeds?.[id] || null;
 // [headKey, score, entityId] in model order: score descending, ties by entity id (stable sort).
-function rankPool(sel) {
-  const sp = seedPool();
+// sel: indices of the seed's chips chosen as interest conditions.
+function rankPool(sel, sp = seedPool()) {
   if (!sp) return null;
   const ps = store.pool.metadata.scoring.interestWeight;
   const ranked = sp.candidates.map(([hk, eid, sh, cs]) => [hk, sel.length ? (1 - ps) * sh + ps * sel.reduce((a, i) => a + cs[i], 0) / sel.length : sh, eid]);
@@ -1280,15 +1278,16 @@ function gumbelTopK(cands, k, T) {
   return cands.map(c => ({ c, key: c[1] / T - Math.log(-Math.log(Math.random() || 1e-12)) }))
     .sort((a, b) => b.key - a.key).slice(0, k).map(x => x.c);
 }
-function recommend() {
-  const seed = store.demo.catalog[D.seed];
-  const ranked = rankPool(selectedIdx());
+function recommendFor(seedId, chips) {
+  const seed = store.demo.catalog[seedId];
+  const sp = seedPool(seedId);
+  const ranked = sp ? rankPool(sp.chips.map(([r, v], i) => (chips.has(`${r}|${v}`) ? i : -1)).filter(i => i >= 0), sp) : null;
   if (!ranked) {
-    const recs = store.demo.scenarios[`${D.seed}|all`].recommendations.map(r => ({ ...store.items.get(r.headKey), ...r, sharedAttributes: [], chipMatches: 0 }));
+    const recs = store.demo.scenarios[`${seedId}|all`].recommendations.map(r => ({ ...store.items.get(r.headKey), ...r, sharedAttributes: [], chipMatches: 0 }));
     return { recs, poolSize: recs.length, boostedKeys: new Set() };
   }
   const picked = RECOMMEND_TEMPERATURE > 0 ? gumbelTopK(ranked, 6, RECOMMEND_TEMPERATURE) : ranked.slice(0, 6);
-  const rows = cafeWeights(picked.map(c => c[0]), e => D.chips.has(`${e.relation}|${e.value}`));
+  const rows = cafeWeights(picked.map(c => c[0]), e => chips.has(`${e.relation}|${e.value}`));
   const seedKeys = new Set(seed.attributes.map(a => `${a.relation}|${a.value}`));
   const excluded = excludedNodes();
   const recs = picked.map(([hk, score]) => {
@@ -1296,7 +1295,7 @@ function recommend() {
     return {
       ...info, score,
       sharedAttributes: info.attributes.filter(a => seedKeys.has(`${a.relation}|${a.value}`) && !excluded.has(a.value)),
-      chipMatches: info.attributes.filter(a => D.chips.has(`${a.relation}|${a.value}`)).length,
+      chipMatches: info.attributes.filter(a => chips.has(`${a.relation}|${a.value}`)).length,
       explanationEdges: rows.filter(e => e.head === hk).sort((a, b) => b.weight - a.weight)
         .map(({ relation, value, weight }) => ({ relation, value, weight })),
     };
@@ -1304,6 +1303,7 @@ function recommend() {
   const boostedKeys = new Set(rows.filter(e => e.boosted).map(e => `${e.relation}|${e.value}`));
   return { recs, poolSize: ranked.length, boostedKeys };
 }
+const recommend = () => recommendFor(D.seed, D.chips);
 // The six with no chips chosen (for rank changes).
 function baseHeads() {
   const ranked = rankPool([]);
@@ -1863,6 +1863,7 @@ function openCredits() {
     el('p', { text: `이 페이지의 유물 사진 ${rows.length}점은 국립중앙박물관이 e뮤지엄으로 공개한 실제 소장품 사진입니다. 각 사진은 소장기관과 소장품번호를 확인해 연결했고, 이용조건은 공공누리 표시를 따릅니다.` }),
     el('p', { text: '첫 화면과 진열장의 기준 유물 5점은 원본 사진의 배경을 지워 사용했습니다. 공공누리 제1유형은 출처를 표시하면 변경 이용을 허락합니다.' }),
     el('p', { text: '첫 화면·이야기·진열장·바닥글의 배경 영상과 이미지, 비단 질감은 생성형 AI로 만든 장식용 그림입니다. 실제 유물이나 장소를 찍은 것이 아닙니다.' }),
+    el('p', { text: '첫 화면의 AI 큐레이터 로봇 이미지와 외피가 열리는 영상도 생성형 AI로 만든 연출이며, 실제 기기를 촬영한 것이 아닙니다. 영상 뒤의 가중치 그래프와 추천 여섯 점은 실제 모델 결과입니다.' }),
     el('p', {}, el('a', { href: 'https://www.emuseum.go.kr/copyright', target: '_blank', rel: 'noopener noreferrer', text: 'e뮤지엄 저작권 정책' })),
     list,
     el('div', { class: 'collection-more' }, more));
@@ -2008,6 +2009,718 @@ function initReveals() {
   targets.forEach(t => { if (t.getBoundingClientRect().top > innerHeight) { t.classList.add('reveal'); io.observe(t); } });
 }
 
+/* Curator hero ---------------------------------------------------------------------------------
+   The museum's AI curator robot (a generated clip, assets/media/curator-explode.mp4) opens its
+   shell as the visitor drags the timeline under it; the core in its chest is the LLM. Then the
+   CAFE weights of the six artifacts recommended for 청자 상감 매병 plug into that core as a 3D
+   bundle: one strand per (artifact, relation, value) edge, width and brightness in proportion to
+   its CAFE weight (the same numbers the ring view in 발견 draws), heaviest first. Drag the bundle
+   to turn it. Under prefers-reduced-motion (<html data-curator="still">) nothing moves on its own:
+   no idle turning, no light pulses; the timeline still works by hand. */
+
+// The core on the clip's last frame, measured on the 1280×720 encode: centre at 50.7% / 49.1%
+// of the frame, radius 8.4% of the frame width (the halo reaches about 11.8%).
+const CORE_X = .507;
+const CORE_Y = .491;
+const CORE_R = .084;
+// The chest core through the clip: [s, x, y, r] as frame fractions (r of the frame width),
+// measured every 0.5 s. Until 2.6 s the shell is closed: the chest centre, no radius.
+const CORE_TRACK = [
+  [0, .709, .497, 0], [.5, .7045, .497, 0], [1, .6995, .497, 0], [1.5, .691, .496, 0], [2, .682, .496, 0],
+  [2.6, .6732, .4928, .0249], [3, .657, .4949, .0273], [3.5, .64, .4965, .0283], [4, .6223, .4976, .0293],
+  [4.5, .6039, .4978, .0305], [5, .5859, .4979, .0318], [5.5, .57, .4981, .0338], [6, .5561, .4981, .0366],
+  [6.5, .5439, .4977, .0398], [7, .5337, .4976, .0435], [7.5, .5252, .4971, .0477], [8, .5187, .4961, .0527],
+  [8.5, .5137, .4953, .0587], [9, .5102, .4943, .0656], [9.5, .5079, .4927, .0741], [10, CORE_X, CORE_Y, CORE_R],
+];
+const CLIP_END = 10;              // seconds; the track's last row is the clip's last frame
+const ROBOT_SPAN = [.045, .89];   // head top and wheels, first frame (fractions of frame height)
+// Effect strengths: 0 turns an effect off, 1 is the designed strength.
+const CUR_FX = {
+  glow: 1,    // the core's ivory glow and pale gold halo, and the gold glow on the heaviest strands
+  pulse: 1,   // light pulses running down the strands into the core (count, brightness)
+  turn: .07,  // idle turning of the finished bundle, radians per second (0 = still)
+  fog: .5,    // how much the far side of the bundle dims (depth cue)
+};
+const CUR_SEED = '동원1347';      // 청자 상감 매병, the story's artifact
+const CUR_PLAY_S = 16;           // the play button runs the whole timeline in this many seconds
+const CUR_SMOOTH_MS = 90;        // the timeline eases toward the slider with this time constant
+// Timeline (fractions of the slider). The labels under the slider (index.html) follow it.
+const CUR_T = {
+  clip: [0, .55],     // robot clip, first to last frame; dragging back reassembles it
+  nodes: [.58, .7],   // the six recommended artifacts appear around the core
+  edges: [.63, .94],  // their CAFE strands plug into the core, heaviest first
+};
+// 3D bundle, world units: artifacts at distance 1 from the core.
+const CUR_3D = { core: .22, node: .12, cam: 4.2, scale: .36, samples: 18 };
+const FAMILY_RGB = { time: '214, 178, 94', material: '130, 170, 208', pattern: '216, 116, 92', class: '143, 191, 169', place: '221, 212, 194' };
+const CUR_STEPS = [
+  ['국립중앙박물관 AI 큐레이터', '아래 막대를 끌면 외피가 열리고, 가슴 속 LLM 코어가 드러납니다.'],
+  ['LLM 코어', '해설을 쓰는 언어 모델입니다. 추천의 이유가 이 코어로 전달됩니다.'],
+  ['CAFE 가중치 → LLM', '청자 상감 매병을 본 관람객에게 추천한 여섯 점의 속성 연결이 CAFE 가중치만큼 굵고 밝게 코어로 꽂힙니다. 끌어서 돌려 보세요.'],
+];
+
+function coreAt(t) {
+  const T = CORE_TRACK;
+  if (t <= T[0][0]) return T[0];
+  for (let i = 1; i < T.length; i++) {
+    if (t > T[i][0]) continue;
+    const [t0, x0, y0, r0] = T[i - 1];
+    const [t1, x1, y1, r1] = T[i];
+    const k = (t - t0) / (t1 - t0);
+    return [t, x0 + (x1 - x0) * k, y0 + (y1 - y0) * k, r0 + (r1 - r0) * k];
+  }
+  return T[T.length - 1];
+}
+const v3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  unit: a => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+// The six recommended for the seed and their CAFE edges, laid out in 3D. Artifacts sit on a crown
+// around the core (alternately above and below); each edge leaves its artifact on its own side of
+// a fan, so an artifact's strands open like a bundle and close again at the core.
+function curatorBundle() {
+  const seed = store.demo?.catalog?.[CUR_SEED];
+  if (!seed || !seedPool(CUR_SEED)) return null;
+  const { recs } = recommendFor(CUR_SEED, new Set());
+  const weights = recs.flatMap(r => r.explanationEdges.map(e => e.weight));
+  const lo = Math.min(...weights);
+  const hi = Math.max(...weights);
+  const { core, node, samples } = CUR_3D;
+  const nodes = recs.map((rec, i) => {
+    const az = (i * 60 + 30) * Math.PI / 180;
+    const el = (i % 2 ? -24 : 24) * Math.PI / 180;
+    const pos = [Math.cos(el) * Math.sin(az), -Math.sin(el), Math.cos(el) * Math.cos(az)];
+    return { rec, i, pos, photo: photoFor(rec), label: short(rec.name, 9) };
+  });
+  const strands = [];
+  for (const nd of nodes) {
+    const u = nd.pos;
+    let v = v3.cross(u, [0, 1, 0]);
+    if (Math.hypot(...v) < .2) v = v3.cross(u, [1, 0, 0]);
+    v = v3.unit(v);
+    const w = v3.cross(u, v);
+    const edges = nd.rec.explanationEdges;
+    edges.forEach((e, j) => {
+      const b = (2 * Math.PI * j) / edges.length + nd.i * .9;
+      const o = v3.add(v3.mul(v, Math.cos(b)), v3.mul(w, Math.sin(b)));
+      const P0 = v3.add(v3.mul(u, 1 - node * .8), v3.mul(o, node * .45));
+      const P1 = v3.add(v3.mul(u, .68), v3.mul(o, .34));
+      const P2 = v3.add(v3.mul(u, .38), v3.mul(o, .26));
+      const P3 = v3.mul(v3.unit(v3.add(u, v3.mul(o, .55))), core * 1.02);
+      const pts = [];
+      for (let k = 0; k <= samples; k++) {
+        const t = k / samples;
+        const a = (1 - t) ** 3;
+        const b2 = 3 * (1 - t) ** 2 * t;
+        const c = 3 * (1 - t) * t * t;
+        const d = t ** 3;
+        pts.push([0, 1, 2].map(m => a * P0[m] + b2 * P1[m] + c * P2[m] + d * P3[m]));
+      }
+      strands.push({ nd, e, fam: familyOf(e.relation), norm: (e.weight - lo) / Math.max(1e-12, hi - lo), pts, phase: Math.random() });
+    });
+  }
+  // Strands connect heaviest first; each artifact names its heaviest.
+  [...strands].sort((a, b) => b.e.weight - a.e.weight).forEach((s, j) => { s.order = j; s.top = j < 3; });
+  for (const nd of nodes) strands.filter(s => s.nd === nd).sort((a, b) => b.e.weight - a.e.weight).slice(0, 1).forEach(s => { s.named = true; });
+  return { nodes, strands, recs };
+}
+
+class CuratorHero {
+  constructor(mode) {
+    this.still = mode === 'still';
+    this.wrap = $('#cur-wrap');
+    this.stage = $('#cur-stage');
+    this.box = $('#cur-box');
+    this.canvas = $('#cur-canvas');
+    this.g = this.canvas.getContext('2d');
+    this.range = $('#cur-range');
+    this.playBtn = $('#cur-play');
+    this.tip = $('#cur-tip');
+    this.plaques = { robot: $('#cur-plaque-robot'), core: $('#cur-plaque-core') };
+    this.stepEl = $('#cur-step');
+    this.step = -1;
+    this.net = null;
+    this.video = null;
+    this.ready = false;
+    this.pending = null;
+    this.target = 0;
+    this.pS = 0;
+    this.playing = false;
+    this.yaw = .5;
+    this.pitch = -.32;
+    this.spin = 0;
+    this.drag = null;
+    this.hover = null;
+    this.visible = true;
+    this.running = false;
+    this.dirty = true;
+    this.leaders = [];
+    this.pulseSprite = HeroFX.sprite('255, 250, 238', '240, 214, 152', 64, .22);
+    new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; this.sync(); }).observe(this.stage);
+    document.addEventListener('visibilitychange', () => this.sync());
+    new ResizeObserver(() => { this.layout(); this.sync(); }).observe(this.stage);
+    this.bindControls();
+    this.bindPointer();
+    this.layout();
+    this.loadVideo();
+    document.fonts?.ready.then(() => this.layout());
+    this.setStep(0, true);
+    this.sync();
+  }
+
+  bindControls() {
+    const r = this.range;
+    const set = v => { this.target = clamp(v, 0, 1); this.paint(); this.sync(); };
+    r.addEventListener('input', () => { this.setPlaying(false); this.wrap.classList.add('touched'); set(r.value / 1000); });
+    // iOS shows seeked frames only after the clip has played once inside a gesture.
+    r.addEventListener('pointerdown', () => { this.video?.play().then(() => this.video.pause()).catch(() => {}); }, { once: true });
+    this.playBtn.addEventListener('click', () => {
+      this.wrap.classList.add('touched');
+      if (!this.playing && this.target >= .999) { this.target = 0; this.pS = 0; }
+      this.setPlaying(!this.playing);
+    });
+  }
+  setPlaying(on) {
+    this.playing = on;
+    this.playBtn.setAttribute('aria-pressed', String(on));
+    this.playBtn.setAttribute('aria-label', on ? '멈춤' : '자동으로 재생');
+    this.sync();
+  }
+  // The slider's fill and value follow the timeline (also while the play button runs it).
+  paint() {
+    this.range.style.setProperty('--p', this.target.toFixed(4));
+    const v = String(Math.round(this.target * 1000));
+    if (this.range.value !== v) this.range.value = v;
+    this.range.setAttribute('aria-valuetext', CUR_STEPS[this.target < .22 ? 0 : this.target < .6 ? 1 : 2][0]);
+  }
+
+  bindPointer() {
+    const c = this.canvas;
+    const at = e => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    c.addEventListener('pointerdown', e => {
+      if (!this.live) return;
+      const [x, y] = at(e);
+      this.drag = { x, y, x0: x, y0: y, t: performance.now(), moved: false };
+      this.spin = 0;
+      c.setPointerCapture(e.pointerId);
+      c.classList.add('dragging');
+      this.sync();
+    });
+    c.addEventListener('pointermove', e => {
+      const [x, y] = at(e);
+      if (this.drag) {
+        const dx = x - this.drag.x;
+        const dy = y - this.drag.y;
+        const now = performance.now();
+        this.yaw += dx * .008;
+        this.pitch = clamp(this.pitch + dy * .006, -1.1, 1.1);
+        this.spin = (dx * .008) / Math.max(8, now - this.drag.t) * 1000;
+        Object.assign(this.drag, { x, y, t: now });
+        if (Math.hypot(x - this.drag.x0, y - this.drag.y0) > 4) this.drag.moved = true;
+        this.hover = null;
+        this.showTip(null);
+      } else if (this.live) this.pick(x, y);
+      this.dirty = true;
+      this.sync();
+    });
+    const end = e => {
+      if (!this.drag) return;
+      const { moved } = this.drag;
+      this.drag = null;
+      c.classList.remove('dragging');
+      if (!moved) {
+        const [x, y] = at(e);
+        this.pick(x, y);
+        const nd = this.hover?.node || this.hover?.strand?.nd;
+        if (nd) openArtifact(nd.rec, { rank: nd.i + 1, rec: nd.rec });
+      }
+    };
+    c.addEventListener('pointerup', end);
+    c.addEventListener('pointercancel', end);
+    c.addEventListener('pointerleave', () => { if (!this.drag) { this.hover = null; this.showTip(null); this.dirty = true; } });
+  }
+  // Nearest artifact or strand under the pointer, from the last frame's screen positions.
+  pick(x, y) {
+    let best = null;
+    let dmin = 10;
+    for (const nd of this.net?.nodes || []) {
+      if (!nd.scr) continue;
+      const d = Math.hypot(x - nd.scr[0], y - nd.scr[1]) - nd.scr[2];
+      if (d < dmin) { dmin = d; best = { node: nd }; }
+    }
+    if (!best) {
+      for (const s of this.net?.strands || []) {
+        if (!s.scr) continue;
+        for (const [px, py] of s.scr) {
+          const d = Math.hypot(x - px, y - py);
+          if (d < dmin) { dmin = d; best = { strand: s }; }
+        }
+      }
+    }
+    this.hover = best;
+    this.canvas.classList.toggle('pointing', Boolean(best));
+    if (!best) { this.showTip(null); return; }
+    if (best.node) {
+      const r = best.node.rec;
+      const total = this.net.strands.filter(s => s.nd === best.node).reduce((a, s) => a + s.e.weight, 0);
+      this.showTip(x, y, `추천 ${best.node.i + 1}위 · ${r.name}`, `이 유물이 코어에 넘기는 CAFE 가중치 합 ${pct(total)} · 눌러서 자세히`);
+    } else {
+      const { e, nd } = best.strand;
+      this.showTip(x, y, `${REL_LABEL[e.relation] || e.relation} · ${e.value}`, `${nd.label}에서 LLM 코어로 · CAFE 가중치 ${pct(e.weight)}`);
+    }
+  }
+  showTip(x, y, title, text) {
+    const t = this.tip;
+    if (x == null) { t.classList.remove('on'); return; }
+    t.replaceChildren(el('b', { text: title }), el('span', { text }));
+    t.classList.add('on');
+    const w = t.offsetWidth;
+    const h = t.offsetHeight;
+    const G = this.geo;
+    t.style.transform = `translate3d(${clamp(x + 14, 4, G.W - w - 4).toFixed(0)}px, ${clamp(y - h - 12, 4, G.H - h - 4).toFixed(0)}px, 0)`;
+  }
+
+  layout() {
+    const r = this.stage.getBoundingClientRect();
+    const W = r.width;
+    const H = r.height;
+    if (!W || !H) return;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    this.dpr = dpr;
+    this.canvas.width = Math.round(W * dpr);
+    this.canvas.height = Math.round(H * dpr);
+    this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const S = Math.min(W, H);
+    const A = { x: W / 2, y: H / 2 };
+    const cy0 = CORE_TRACK[0][2];
+    const H0 = Math.min((A.y - 4) / (cy0 - ROBOT_SPAN[0]), (H - 4 - A.y) / (ROBOT_SPAN[1] - cy0));
+    const W0 = H0 * 16 / 9;
+    const U = CUR_3D.scale * S;
+    // The clip pushes in on the core; the box shrinks as it plays so the clip's core ends exactly
+    // as large as the bundle's core.
+    const coreEnd = CUR_3D.core * U;
+    this.geo = { W, H, S, A, U, W0, W1: coreEnd / CORE_R, coreEnd, nodeR: CUR_3D.node * U, fs: clamp(S * .02, 11, 13.5) };
+    this.box.classList.add('placed');
+    this.box.style.setProperty('--bw', `${W0.toFixed(1)}px`);
+    this.box.style.setProperty('--bh', `${H0.toFixed(1)}px`);
+    this.boxKey = '';
+    this.size = Object.fromEntries(Object.entries(this.plaques).map(([k, n]) => [k, [n.offsetWidth, n.offsetHeight]]));
+    for (const nd of this.net?.nodes || []) nd.sprite = null;
+    this.dirty = true;
+  }
+
+  loadVideo() {
+    const small = matchMedia('(max-width: 900px)').matches;
+    const src = (small && this.wrap.dataset.videoMobile) || this.wrap.dataset.video;
+    const v = el('video', { class: 'cur-video', muted: true, playsinline: true, preload: 'auto', 'aria-hidden': 'true' });
+    v.muted = true;
+    this.box.append(v);
+    this.video = v;
+    v.addEventListener('seeked', () => {
+      if (this.pending == null) return;
+      const t = this.pending;
+      this.pending = null;
+      if (Math.abs(v.currentTime - t) > .02) v.currentTime = t;
+    });
+    // A Blob URL keeps every frame seekable even where the server ignores Range requests.
+    fetch(src).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); }).then(blob => {
+      v.addEventListener('loadeddata', () => { this.ready = true; v.classList.add('ready'); this.dirty = true; this.sync(); }, { once: true });
+      v.src = URL.createObjectURL(blob);
+    }).catch(() => v.remove());
+  }
+
+  setData() {
+    this.net = curatorBundle();
+    if (!this.net) return;
+    for (const nd of this.net.nodes) {
+      if (!nd.photo) continue;
+      const img = new Image();
+      img.decoding = 'async';
+      img.addEventListener('load', () => { nd.img = img; nd.sprite = null; this.dirty = true; this.sync(); }, { once: true });
+      img.src = nd.photo.thumb || nd.photo.image;
+    }
+    this.dirty = true;
+    this.sync();
+  }
+
+  sync() {
+    const go = this.visible && !document.hidden;
+    if (go && !this.running) {
+      this.running = true;
+      this.prev = 0;
+      requestAnimationFrame(t => this.loop(t));
+    } else if (!go) this.running = false;
+  }
+  loop(now) {
+    if (!this.running) return;
+    const dt = this.prev ? Math.min(64, now - this.prev) : 16.7;
+    this.prev = now;
+    let moving = this.dirty;
+    if (this.playing) {
+      this.target = Math.min(1, this.target + dt / (CUR_PLAY_S * 1000));
+      this.paint();
+      if (this.target >= 1) this.setPlaying(false);
+      moving = true;
+    }
+    const d = this.target - this.pS;
+    if (Math.abs(d) < 1e-4) this.pS = this.target;
+    else { this.pS += d * (1 - Math.exp(-dt / CUR_SMOOTH_MS)); moving = true; }
+    // The finished bundle keeps turning (and its pulses flowing) unless reduced motion is asked for.
+    if (this.pS >= CUR_T.clip[1] - .06) {
+      if (!this.drag) {
+        if (Math.abs(this.spin) > .002) { this.yaw += this.spin * dt / 1000; this.spin *= Math.pow(.05, dt / 1000); moving = true; }
+        else if (!this.still && !this.hover && this.pS >= CUR_T.edges[1]) this.yaw += CUR_FX.turn * dt / 1000;
+      }
+      moving ||= !this.still;
+    }
+    if (moving) this.frame(now);
+    requestAnimationFrame(t => this.loop(t));
+  }
+
+  state(s) {
+    const T = CUR_T;
+    const hand0 = T.clip[0] + .9 * (T.clip[1] - T.clip[0]);
+    const n = this.net?.strands.length || 1;
+    const eSpan = T.edges[1] - T.edges[0] - .07;
+    const nSpan = T.nodes[1] - T.nodes[0] - .04;
+    return {
+      vt: CLIP_END * clamp((s - T.clip[0]) / (T.clip[1] - T.clip[0]), 0, 1),
+      handK: smooth(hand0, T.clip[1], s),
+      boxAlpha: 1 - smooth(T.clip[1] - .005, T.clip[1] + .02, s),
+      robot: 1 - smooth(.09, .14, s),
+      core: smooth(.17, .22, s) * (1 - smooth(T.clip[1], T.nodes[0] + .02, s)),
+      llmK: smooth(T.clip[1] - .01, T.clip[1] + .03, s),
+      appear: nd => smooth(T.nodes[0] + nSpan * nd.i / 5, T.nodes[0] + nSpan * nd.i / 5 + .04, s),
+      grow: st => smooth(T.edges[0] + eSpan * st.order / Math.max(1, n - 1), T.edges[0] + eSpan * st.order / Math.max(1, n - 1) + .07, s),
+      step: s < .22 ? 0 : s < .6 ? 1 : 2,
+    };
+  }
+  placeBox(t) {
+    const G = this.geo;
+    const [, x, y, r] = coreAt(t);
+    const w = G.W0 * Math.pow(G.W1 / G.W0, clamp(t / CLIP_END, 0, 1));
+    const h = w * 9 / 16;
+    const bx = G.A.x - x * w;
+    const by = G.A.y - y * h;
+    const key = `${bx.toFixed(1)} ${by.toFixed(1)} ${w.toFixed(1)}`;
+    if (key !== this.boxKey) {
+      this.boxKey = key;
+      this.box.style.transform = `translate3d(${bx.toFixed(1)}px, ${by.toFixed(1)}px, 0) scale(${(w / G.W0).toFixed(4)})`;
+      // Half-percent steps: the feather mask is only re-rasterised when it actually changes.
+      // The head top sits 4.5% below the frame's top edge at first; the feather widens as the camera closes in.
+      const fy = (Math.round((3 + 11 * smooth(1.2, 5, t)) * 2) / 2).toFixed(1);
+      const fx = (Math.round((4 + 8 * smooth(1.5, 6, t)) * 2) / 2).toFixed(1);
+      if (fy !== this.fy || fx !== this.fx) {
+        this.fy = fy;
+        this.fx = fx;
+        this.box.style.setProperty('--fy', `${fy}%`);
+        this.box.style.setProperty('--fx', `${fx}%`);
+      }
+    }
+    return { x: bx, y: by, w, h, cr: r * w, hx: x };
+  }
+  seek(t) {
+    const v = this.video;
+    if (!this.ready || !v) return;
+    t = Math.min(t, (v.duration || CLIP_END) - .04);
+    if (v.seeking) { this.pending = t; return; }
+    if (Math.abs(v.currentTime - t) > .02) v.currentTime = t;
+  }
+  setStep(i, force = false) {
+    if (i === this.step && !force) return;
+    this.step = i;
+    const [kicker, text] = CUR_STEPS[i];
+    const node = this.stepEl;
+    node.classList.add('swap');
+    clearTimeout(this.stepTimer);
+    this.stepTimer = setTimeout(() => {
+      node.replaceChildren(el('b', { text: kicker }), el('span', { text }));
+      node.classList.remove('swap');
+    }, force ? 0 : 260);
+  }
+  // Writes a style only when its value changes (this runs every frame while the timeline moves).
+  css(node, prop, value) {
+    const memo = node.__curCss || (node.__curCss = {});
+    if (memo[prop] === value) return;
+    memo[prop] = value;
+    node.style.setProperty(prop, value);
+  }
+
+  frame(now) {
+    const G = this.geo;
+    if (!G) return;
+    this.dirty = false;
+    const s = this.state(this.pS);
+    const b = this.placeBox(this.ready ? s.vt : 0);
+    this.seek(s.vt);
+    this.css(this.box, 'opacity', s.boxAlpha < 1 ? s.boxAlpha.toFixed(3) : '');
+    this.css(this.box, 'filter', s.handK > 0 && s.boxAlpha > 0 ? `brightness(${(1 - .85 * s.handK).toFixed(2)})` : '');
+    // The canvas core takes the clip's core over at the same place and size.
+    s.coreR = this.ready && this.pS < CUR_T.clip[1] ? b.cr : G.coreEnd;
+    this.live = Boolean(this.net) && this.pS >= CUR_T.nodes[0];
+    this.canvas.classList.toggle('live', this.live);
+    this.placePlaques(b, s);
+    this.setStep(s.step);
+    this.draw(s, now);
+  }
+  placePlaques(b, s) {
+    const G = this.geo;
+    this.leaders = [];
+    const put = (key, alpha, x, y, tx, ty, side) => {
+      const n = this.plaques[key];
+      this.css(n, 'opacity', alpha > .001 ? alpha.toFixed(3) : '0');
+      if (alpha <= .001) return;
+      const [w, h] = this.size[key];
+      // Kept inside the stage; the leader leaves from the edge that faces its target.
+      const left = clamp(side > 0 ? x : x - w, 6, G.W - w - 6);
+      const top = clamp(y - h / 2, 4, G.H - h - 4);
+      this.css(n, 'transform', `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0)`);
+      if (tx < left - 4) this.leaders.push([left, top + h / 2, tx, ty, alpha]);
+      else if (tx > left + w + 4) this.leaders.push([left + w, top + h / 2, tx, ty, alpha]);
+      else this.leaders.push([clamp(tx, left + 8, left + w - 8), ty > top + h / 2 ? top + h : top, tx, ty, alpha]);
+    };
+    // Robot: right of the head (left when the stage is too narrow).
+    const hx = b.x + b.hx * b.w;
+    const hy = b.y + .13 * b.h;
+    const gap = .06 * b.w + 26;
+    const right = hx + gap + this.size.robot[0] <= G.W - 8;
+    put('robot', s.robot, right ? hx + gap : hx - gap, hy - 6, hx + (right ? 1 : -1) * .05 * b.w, hy, right ? 1 : -1);
+    // LLM core: up and to the right of the core.
+    const r = Math.max(s.coreR, 6);
+    const off = r + Math.max(26, .12 * G.S);
+    const cRight = G.A.x + off + this.size.core[0] <= G.W - 8;
+    const ang = (cRight ? -38 : -142) * Math.PI / 180;
+    put('core', s.core, G.A.x + (cRight ? off : -off), G.A.y - .2 * G.S, G.A.x + Math.cos(ang) * (r + 4), G.A.y + Math.sin(ang) * (r + 4), cRight ? 1 : -1);
+  }
+
+  // World → screen: turn by yaw (around the vertical) then pitch, then perspective.
+  project(p) {
+    const G = this.geo;
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    const x1 = p[0] * cy + p[2] * sy;
+    const z1 = -p[0] * sy + p[2] * cy;
+    const cp = Math.cos(this.pitch);
+    const sp = Math.sin(this.pitch);
+    const y2 = p[1] * cp - z1 * sp;
+    const z2 = p[1] * sp + z1 * cp;
+    const k = CUR_3D.cam / (CUR_3D.cam - z2);
+    return [G.A.x + x1 * k * G.U, G.A.y + y2 * k * G.U, z2, k];
+  }
+  draw(s, now) {
+    const g = this.g;
+    const G = this.geo;
+    const t = now / 1000;
+    g.clearRect(0, 0, G.W, G.H);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    for (const [x1, y1, x2, y2, a] of this.leaders) {
+      g.strokeStyle = `rgba(214, 178, 94, ${(.7 * a).toFixed(3)})`;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(x1, y1);
+      g.lineTo(x2, y2);
+      g.stroke();
+      g.fillStyle = `rgba(240, 216, 152, ${a.toFixed(3)})`;
+      g.beginPath();
+      g.arc(x2, y2, 2.4, 0, Math.PI * 2);
+      g.fill();
+    }
+    // Far to near: strands (by their middle), artifacts and the core share one depth order.
+    const items = [];
+    if (this.net && this.pS >= CUR_T.nodes[0] - .01) {
+      const hv = this.hover;
+      for (const st of this.net.strands) {
+        const f = s.grow(st);
+        st.scr = null;
+        if (f <= 0 || s.appear(st.nd) <= 0) continue;
+        const scr = st.pts.map(p => this.project(p));
+        st.scr = scr;
+        let hl = 1;
+        if (hv?.node) hl = hv.node === st.nd ? 1 : .18;
+        else if (hv?.strand) hl = hv.strand === st ? 1 : hv.strand.nd === st.nd ? .45 : .14;
+        items.push({ z: scr[CUR_3D.samples >> 1][2], draw: () => this.drawStrand(g, st, scr, f, hl, t) });
+      }
+      for (const nd of this.net.nodes) {
+        const a = s.appear(nd);
+        nd.scr = null;
+        if (a <= 0) continue;
+        const p = this.project(nd.pos);
+        const rad = G.nodeR * p[3] * (.6 + .4 * a);
+        nd.scr = [p[0], p[1], rad];
+        const dim = hv?.node && hv.node !== nd ? .5 : hv?.strand && hv.strand.nd !== nd ? .5 : 1;
+        items.push({ z: p[2], draw: () => this.drawNode(g, nd, p, rad, a * dim) });
+      }
+    }
+    if (s.handK > 0) items.push({ z: 0, draw: () => this.drawCore(g, s, t) });
+    items.sort((a, b) => a.z - b.z).forEach(it => it.draw());
+  }
+  fog(z) { return 1 - CUR_FX.fog * clamp((1 - z) / 2, 0, 1); }
+  drawStrand(g, st, scr, f, hl, t) {
+    const m = CUR_3D.samples;
+    const end = f * m;
+    const last = Math.floor(end);
+    const mid = scr[m >> 1];
+    const fog = this.fog(mid[2]);
+    const a = (.3 + .6 * st.norm) * fog * hl;
+    const width = (1 + 5 * st.norm) * mid[3];
+    const path = () => {
+      g.beginPath();
+      g.moveTo(scr[0][0], scr[0][1]);
+      for (let k = 1; k <= last; k++) g.lineTo(scr[k][0], scr[k][1]);
+      if (last < m) {
+        const u = end - last;
+        g.lineTo(scr[last][0] + (scr[last + 1][0] - scr[last][0]) * u, scr[last][1] + (scr[last + 1][1] - scr[last][1]) * u);
+      }
+    };
+    if (st.top && CUR_FX.glow > 0) {
+      path();
+      g.lineWidth = width + 7;
+      g.strokeStyle = `rgba(214, 178, 94, ${(.16 * CUR_FX.glow * fog * hl).toFixed(3)})`;
+      g.stroke();
+    }
+    path();
+    g.lineWidth = width;
+    g.strokeStyle = `rgba(${FAMILY_RGB[st.fam]}, ${a.toFixed(3)})`;
+    g.stroke();
+    // Light runs from the artifact into the core: more, brighter and faster on heavier strands.
+    if (CUR_FX.pulse > 0 && !this.still) {
+      const count = Math.max(1, Math.round((1 + 2 * st.norm) * CUR_FX.pulse));
+      const speed = .22 + .4 * st.norm;
+      g.globalCompositeOperation = 'lighter';
+      for (let j = 0; j < count; j++) {
+        const u = (t * speed + j / count + st.phase) % 1;
+        if (u > f) continue;
+        const k = (.35 + .65 * st.norm) * fog * hl * smooth(0, .08, u) * (1 - smooth(.85, 1, u));
+        if (k < .01) continue;
+        const pos = u * m;
+        const i0 = Math.min(m - 1, Math.floor(pos));
+        const w = pos - i0;
+        const x = scr[i0][0] + (scr[i0 + 1][0] - scr[i0][0]) * w;
+        const y = scr[i0][1] + (scr[i0 + 1][1] - scr[i0][1]) * w;
+        const size = (7 + 9 * st.norm) * scr[i0][3];
+        g.globalAlpha = Math.min(1, k);
+        g.drawImage(this.pulseSprite, x - size / 2, y - size / 2, size, size);
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+    }
+    // Each artifact's heaviest strand (and every strand of what is pointed at) carries its attribute.
+    const shown = this.hover?.strand === st || this.hover?.node === st.nd || (st.named && !this.hover);
+    if (shown && f >= 1) {
+      const p = scr[Math.round(m * .28)];
+      const fs = this.geo.fs * .92 * clamp(p[3], .85, 1.2);
+      g.font = `500 ${fs.toFixed(1)}px "Noto Serif KR", serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.globalAlpha = clamp(fog * (this.hover ? 1 : .9), 0, 1);
+      g.lineWidth = 4;
+      g.strokeStyle = 'rgba(12, 13, 15, .85)';
+      g.strokeText(st.e.value, p[0], p[1]);
+      g.fillStyle = `rgb(${FAMILY_RGB[st.fam]})`;
+      g.fillText(st.e.value, p[0], p[1]);
+      g.globalAlpha = 1;
+    }
+  }
+  drawCore(g, s, t) {
+    const a = s.handK;
+    const glow = CUR_FX.glow;
+    const { x, y } = this.geo.A;
+    const R = s.coreR * (this.still ? 1 : 1 + .018 * Math.sin(t * 1.4));
+    if (R <= .5) return;
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    const H = R * 2.7;
+    let gr = g.createRadialGradient(x, y, R * .6, x, y, H);
+    gr.addColorStop(0, `rgba(226, 192, 120, ${(.2 * glow * a).toFixed(3)})`);
+    gr.addColorStop(.45, `rgba(214, 178, 94, ${(.07 * glow * a).toFixed(3)})`);
+    gr.addColorStop(1, 'rgba(214, 178, 94, 0)');
+    g.fillStyle = gr;
+    g.fillRect(x - H, y - H, H * 2, H * 2);
+    g.globalCompositeOperation = 'source-over';
+    gr = g.createRadialGradient(x, y - R * .08, 0, x, y, R * 1.12);
+    gr.addColorStop(0, `rgba(255, 252, 244, ${a.toFixed(3)})`);
+    gr.addColorStop(.55, `rgba(250, 240, 218, ${a.toFixed(3)})`);
+    gr.addColorStop(.86, `rgba(238, 214, 164, ${(.92 * a).toFixed(3)})`);
+    gr.addColorStop(1, 'rgba(230, 200, 140, 0)');
+    g.fillStyle = gr;
+    g.beginPath();
+    g.arc(x, y, R * 1.12, 0, Math.PI * 2);
+    g.fill();
+    if (s.llmK > 0) {
+      g.font = `600 ${Math.max(11, R * .5).toFixed(1)}px "Cormorant Garamond", "Noto Serif KR", serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      if ('letterSpacing' in g) g.letterSpacing = `${(R * .05).toFixed(1)}px`;
+      g.fillStyle = `rgba(78, 60, 34, ${(.85 * s.llmK * a).toFixed(3)})`;
+      g.fillText('LLM', x, y + R * .04);
+      if ('letterSpacing' in g) g.letterSpacing = '0px';
+    }
+    g.restore();
+  }
+  // An artifact's photo on a warm plate, multiplied so the studio backdrop melts away (as in the ring view).
+  sprite(nd) {
+    const R = this.geo.nodeR * 1.45;
+    const px = Math.ceil(R * 2 * this.dpr) + 4;
+    if (nd.sprite?.width === px) return nd.sprite;
+    const c = document.createElement('canvas');
+    c.width = c.height = px;
+    const g = c.getContext('2d');
+    const h = px / 2;
+    const r = h - 2;
+    g.save();
+    g.beginPath();
+    g.arc(h, h, r, 0, Math.PI * 2);
+    g.clip();
+    const gr = g.createRadialGradient(h, h - .08 * r, 0, h, h - .08 * r, r * 1.24);
+    gr.addColorStop(0, '#ddd4c3');
+    gr.addColorStop(.58, '#8d877c');
+    gr.addColorStop(1, '#202124');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, px, px);
+    if (nd.img) {
+      const k = (r * 1.84) / Math.max(nd.img.naturalWidth, nd.img.naturalHeight);
+      const iw = nd.img.naturalWidth * k;
+      const ih = nd.img.naturalHeight * k;
+      g.globalCompositeOperation = 'multiply';
+      g.drawImage(nd.img, h - iw / 2, h - ih / 2, iw, ih);
+    }
+    g.restore();
+    g.strokeStyle = 'rgba(214, 178, 94, .7)';
+    g.lineWidth = Math.max(1, this.dpr);
+    g.beginPath();
+    g.arc(h, h, r, 0, Math.PI * 2);
+    g.stroke();
+    nd.sprite = c;
+    return c;
+  }
+  drawNode(g, nd, p, rad, alpha) {
+    const fog = this.fog(p[2]);
+    const spr = this.sprite(nd);
+    const size = (spr.width / this.dpr) * (rad / ((spr.width / 2 - 2) / this.dpr));
+    g.globalAlpha = alpha * (.45 + .55 * fog);
+    g.drawImage(spr, p[0] - size / 2, p[1] - size / 2, size, size);
+    const fs = this.geo.fs;
+    g.font = `500 ${fs.toFixed(1)}px "Noto Serif KR", serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'top';
+    g.lineWidth = 4;
+    g.strokeStyle = 'rgba(12, 13, 15, .85)';
+    const label = `${HANJA_NUM[nd.i]} ${nd.label}`;
+    g.strokeText(label, p[0], p[1] + rad + 5);
+    g.fillStyle = 'rgba(240, 233, 218, .95)';
+    g.fillText(label, p[0], p[1] + rad + 5);
+    g.globalAlpha = 1;
+  }
+}
+function initCuratorHero() {
+  const mode = root.dataset.curator;
+  if (root.dataset.hero === 'moon' || !mode || !$('#cur-wrap')) return null;
+  return new CuratorHero(mode);
+}
+
 /* First-visit intro (slot only until the intro video exists) -------------------
    <html data-intro="..."> names the clip. The inline head script covers the page before first
    paint when it will play. The hero loop waits on its first frame and starts the moment the
@@ -2034,7 +2747,7 @@ function initIntro() {
     if (hv) { hv.currentTime = 0; hv.play().catch(() => {}); }
     root.classList.remove('intro-pending');
     // Replay the hero entrance now that it is actually visible.
-    $$('.hero h1 .line, .hero-lede, .cta-begin, .hero-object').forEach(n => { n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
+    $$('.hero h1 .line, .hero-lede, .cta-begin, .hero-object, .cur-view').forEach(n => { n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
     wrap.classList.add('leaving');
     setTimeout(() => wrap.remove(), 450);
   }
@@ -2051,9 +2764,11 @@ function initIntro() {
 initMasthead();
 initIntro();
 initHero();
+const curator = initCuratorHero();
 initSheets();
 load().then(() => {
   applyMedia(store.manifest);
+  curator?.setData();
   initStory();
   initDiscover();
   initCollection();

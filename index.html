@@ -12,6 +12,11 @@
     (function () {
       var d = document.documentElement;
       d.classList.add('js');
+      // Hero: the AI curator sequence by default; ?hero=moon shows the earlier moon-jar hero.
+      // Curator mode: still under reduced motion (nothing moves on its own), live otherwise.
+      var moon = /[?&]hero=moon\b/.test(location.search);
+      d.dataset.hero = moon ? 'moon' : 'curator';
+      if (!moon) d.dataset.curator = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'still' : 'live';
       // Cover the page before first paint when a first-visit intro will play (app.js removes the cover).
       try {
         var forced = /[?&]intro=1\b/.test(location.search);
@@ -27,9 +32,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400;1,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@300;400;600&display=swap" rel="stylesheet">
-  <link rel="preload" as="image" href="./assets/cutouts/moon-jar.webp">
-  <link rel="stylesheet" href="./styles.css?v=20261115-para">
-  <script type="module" src="./app.js?v=20261115-para"></script>
+  <link rel="preload" as="image" href="./assets/media/curator-poster.webp">
+  <link rel="stylesheet" href="./styles.css?v=20261115-curator3d">
+  <script type="module" src="./app.js?v=20261115-curator3d"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">본문으로 바로가기</a>
@@ -49,30 +54,57 @@
   </header>
 
   <main id="main">
-    <!-- Hero: the moon jar as the moon over an ink-wash range. -->
+    <!-- Hero. Default: the museum's AI curator robot opens on scroll; its chest core (the LLM) gathers
+         the CAFE weights and the six recommendations settle into the ring view.
+         ?hero=moon shows the earlier hero: the moon jar as the moon over an ink-wash range. -->
     <section class="hero" id="top" aria-labelledby="hero-title">
-      <div class="hero-media" aria-hidden="true">
-        <div class="sky"></div>
-        <div class="media-slot" id="hero-slot"></div>
-        <div class="moonlight"></div>
-        <svg class="ink-range" id="hero-range" viewBox="0 0 1600 640" preserveAspectRatio="xMidYMax slice"></svg>
-        <div class="mist mist-a"></div>
-        <div class="mist mist-b"></div>
-        <canvas class="dust" id="hero-fx"></canvas>
-      </div>
-      <div class="hero-inner">
-        <div class="hero-copy">
-          <p class="kicker">ETRI × 건국대학교 · 문화유산 추천 연구</p>
-          <h1 id="hero-title"><span class="line">유물과</span> <span class="line">유물 사이</span></h1>
-          <p class="hero-lede">시대와 재질, 문양이 실처럼 이어집니다. 한 점의 유물에서 관심 있는 다음 유물까지, 연결로 추천의 이유를 보여 드립니다.</p>
-          <a class="cta-begin" href="#discover"><span>발견 시작하기</span><svg viewBox="0 0 40 12" aria-hidden="true"><path d="M0 6h37M32 1l5 5-5 5"/></svg></a>
+      <div class="hero-pin">
+        <div class="hero-media" aria-hidden="true">
+          <div class="sky"></div>
+          <div class="media-slot" id="hero-slot"></div>
+          <div class="moonlight"></div>
+          <svg class="ink-range" id="hero-range" viewBox="0 0 1600 640" preserveAspectRatio="xMidYMax slice"></svg>
+          <div class="mist mist-a"></div>
+          <div class="mist mist-b"></div>
+          <canvas class="dust" id="hero-fx"></canvas>
         </div>
-        <figure class="hero-object" id="hero-object">
-          <div class="halo" aria-hidden="true"></div>
-          <img src="./assets/cutouts/moon-jar.webp" alt="백자 달항아리. 조선 시대, 국립중앙박물관 소장품 신수14621" width="754" height="705" fetchpriority="high">
-          <div class="plinth" aria-hidden="true"></div>
-          <figcaption><b>백자 달항아리</b><span>조선 · 국립중앙박물관 신수14621</span></figcaption>
-        </figure>
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <p class="kicker">ETRI × 건국대학교 · 문화유산 추천 연구</p>
+            <h1 id="hero-title"><span class="line">유물과</span> <span class="line">유물 사이</span></h1>
+            <p class="hero-lede">시대와 재질, 문양이 실처럼 이어집니다. 한 점의 유물에서 관심 있는 다음 유물까지, 연결로 추천의 이유를 보여 드립니다.</p>
+            <a class="cta-begin" href="#discover"><span>발견 시작하기</span><svg viewBox="0 0 40 12" aria-hidden="true"><path d="M0 6h37M32 1l5 5-5 5"/></svg></a>
+          </div>
+          <figure class="hero-object" id="hero-object">
+            <div class="halo" aria-hidden="true"></div>
+            <img src="./assets/cutouts/moon-jar.webp" alt="백자 달항아리. 조선 시대, 국립중앙박물관 소장품 신수14621" width="754" height="705" fetchpriority="high">
+            <div class="plinth" aria-hidden="true"></div>
+            <figcaption><b>백자 달항아리</b><span>조선 · 국립중앙박물관 신수14621</span></figcaption>
+          </figure>
+          <div class="cur-wrap" id="cur-wrap" data-video="./assets/media/curator-explode.mp4" data-video-mobile="./assets/media/curator-explode-mobile.mp4">
+            <p class="sr-only">국립중앙박물관 AI 큐레이터 로봇(생성형 AI로 만든 연출 영상)의 외피가 열리면 가슴 속 LLM 코어가 드러납니다. 청자 상감 매병을 본 관람객에게 추천된 여섯 점의 속성 연결이 CAFE 해설 가중치만큼 굵고 밝은 선이 되어 코어로 꽂힙니다. 아래 막대로 단계를 넘기고, 그래프는 끌어서 돌려 볼 수 있습니다.</p>
+            <div class="cur-stage" id="cur-stage">
+              <div class="cur-shade" aria-hidden="true"></div>
+              <div class="cur-view" aria-hidden="true">
+                <div class="cur-box" id="cur-box">
+                  <img class="cur-poster" src="./assets/media/curator-poster.webp" alt="" width="1920" height="1086" fetchpriority="high" decoding="async">
+                </div>
+              </div>
+              <canvas class="cur-canvas" id="cur-canvas" aria-hidden="true"></canvas>
+              <div class="cur-tip" id="cur-tip" aria-hidden="true"></div>
+              <div class="cur-plaque" id="cur-plaque-robot" aria-hidden="true"><span class="tag-glyph">館</span><span class="tag-text"><small>국립중앙박물관</small><b>AI 큐레이터</b><em><span class="m-hide">로봇 모습은 </span>생성형 AI 연출</em></span></div>
+              <div class="cur-plaque" id="cur-plaque-core" aria-hidden="true"><span class="tag-glyph">言</span><span class="tag-text"><small>해설을 쓰는 언어 모델</small><b>LLM 코어</b></span></div>
+            </div>
+            <div class="cur-ctrl" id="cur-ctrl">
+              <button class="cur-play" id="cur-play" type="button" aria-pressed="false" aria-label="자동으로 재생"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="i-play" d="M4 2.5v11l9.5-5.5z"/><path class="i-pause" d="M4 2.5h3v11H4zM9 2.5h3v11H9z"/></svg></button>
+              <div class="cur-track">
+                <input class="cur-range" id="cur-range" type="range" min="0" max="1000" step="1" value="0" aria-label="AI 큐레이터 연출: 로봇에서 CAFE 가중치 전달까지">
+                <ol class="cur-marks" aria-hidden="true"><li style="--at: 0">로봇</li><li style="--at: .2">외피 분리</li><li style="--at: .55">LLM 코어</li><li style="--at: .78">CAFE 가중치</li><li style="--at: 1">전달</li></ol>
+              </div>
+            </div>
+            <p class="cur-step" id="cur-step" aria-hidden="true"><b>국립중앙박물관 AI 큐레이터</b><span>가슴 속 LLM 코어로, 청자 상감 매병을 본 관람객에게 추천할 여섯 점의 해설 가중치(CAFE)가 모입니다. 선이 굵고 밝을수록 가중치가 큽니다.</span></p>
+          </div>
+        </div>
       </div>
     </section>
 
