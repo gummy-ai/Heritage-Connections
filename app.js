@@ -1883,9 +1883,6 @@ function initSheets() {
   const poster = () => showSheet($('#poster-dialog'));
   $('#poster-open').addEventListener('click', poster);
   $('#poster-frame').addEventListener('click', poster);
-  const paper = () => showSheet($('#paper-dialog'));
-  $('#paper-open').addEventListener('click', paper);
-  $('#paper-frame').addEventListener('click', paper);
 }
 
 /* Collection: filters, search, batches -------------------------------------- */
