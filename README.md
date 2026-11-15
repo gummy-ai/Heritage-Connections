@@ -2,7 +2,7 @@
 
 국립중앙박물관 유물의 연결을 살펴보고, 관심사에 따른 추천을 체험하는 웹사이트입니다.
 
-**[공개 웹사이트 바로가기 →](https://gummy-ai.github.io/temp-website/)**
+**[공개 웹사이트 바로가기 →](https://gummy-ai.github.io/Heritage-Connections/)**
 
 GitHub Pages에 공개되어 있어 설치나 로그인 없이 브라우저에서 이용할 수 있습니다.
 
